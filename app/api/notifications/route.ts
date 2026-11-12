@@ -1,15 +1,20 @@
 import { NextResponse } from 'next/server';
 import db, { getOrCreateDefaultUser } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 
-export async function GET() {
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+export async function GET(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
+    const user = authUser ? authUser : getOrCreateDefaultUser();
 
-    // 1. Fetch recent audit logs as system notifications
+    // 1. Fetch recent audit logs as system notifications (schema uses 'timestamp' column)
     const logs = db.prepare(`
       SELECT * FROM audit_logs
       WHERE user_id = ?
-      ORDER BY created_at DESC
+      ORDER BY timestamp DESC
       LIMIT 25
     `).all(user.id) as any[];
 
@@ -54,7 +59,7 @@ export async function GET() {
         type: 'system',
         title: `Security & Activity Audit`,
         description: `${l.action.replace(/_/g, ' ')}`,
-        timestamp: l.created_at,
+        timestamp: l.timestamp,
         severity: l.action.includes('SECURITY') ? 'warning' : 'info',
         ref: null
       }))
@@ -65,6 +70,8 @@ export async function GET() {
       total_count: notifications.length,
       unread_count: notifications.filter(n => n.severity === 'success' || n.severity === 'warning').length,
       notifications
+    }, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' }
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
