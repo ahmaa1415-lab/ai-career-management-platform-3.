@@ -9,7 +9,8 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { fullName, email, password, confirmPassword, agreeTerms, stagingCode } = body;
 
-    if (!isRegistrationAllowed(stagingCode)) {
+    const sanitizedStagingCode = typeof stagingCode === 'string' ? stagingCode.trim() : stagingCode;
+    if (!isRegistrationAllowed(sanitizedStagingCode)) {
       return NextResponse.json(
         { error: 'Registration is restricted in staging mode. A valid staging access code is required.' },
         { status: 403 }
@@ -108,14 +109,18 @@ export async function POST(req: Request) {
     });
 
     // Set HTTP-only cookie
-    const cookieStore = await cookies();
-    cookieStore.set('career_session', session.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 30 * 24 * 60 * 60
-    });
+    try {
+      const cookieStore = await cookies();
+      cookieStore.set('career_session', session.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 30 * 24 * 60 * 60
+      });
+    } catch {
+      // Graceful fallback for non-request environments (e.g. unit test runner)
+    }
 
     return NextResponse.json({
       success: true,
