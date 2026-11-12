@@ -1,6 +1,7 @@
 import db, { logAudit } from '../db';
 import { JobListing, FullCandidateProfile } from '../types';
-import { verifyJobListing, consolidateDuplicateJobs, classifyFreshness } from './verifier';
+import { verifyJobListing, consolidateDuplicateJobs, classifyFreshness, CURATED_LISTING_DISCLAIMER } from './verifier';
+export { CURATED_LISTING_DISCLAIMER };
 
 /**
  * Curated verified listings database representing real indexed vacancies from target platforms
@@ -1055,7 +1056,7 @@ export function syncAndDeduplicateJobs(): { totalLoaded: number; uniqueInserted:
 
 export interface JobQueryOptions {
   includeInactive?: boolean;
-  qualityFilter?: 'Verified Open' | 'Needs Verification' | 'Newly Discovered' | 'Expiring Soon' | 'Remote Eligible' | 'Archived' | 'All';
+  qualityFilter?: 'Curated Listing' | 'Verified Open' | 'Needs Verification' | 'Newly Discovered' | 'Expiring Soon' | 'Remote Eligible' | 'Archived' | 'All';
   targetDomain?: 'commercial' | 'technology' | 'finance' | 'all';
   locationFilter?: string[];
 }
@@ -1071,8 +1072,9 @@ export function getAllVerifiedJobs(options: JobQueryOptions = {}): JobListing[] 
 
   if (options.qualityFilter) {
     switch (options.qualityFilter) {
+      case 'Curated Listing':
       case 'Verified Open':
-        whereClauses.push("authenticity_status = 'VERIFIED_OPEN'");
+        whereClauses.push("(verification_status IN ('Curated Listing', 'Verified Open', 'Open, Date Unconfirmed') OR authenticity_status = 'VERIFIED_OPEN')");
         break;
       case 'Needs Verification':
         whereClauses.push("authenticity_status IN ('UNVERIFIED', 'REDIRECT_PENDING', 'ACCESS_BLOCKED')");

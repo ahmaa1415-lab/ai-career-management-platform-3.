@@ -386,6 +386,16 @@ export function initializeSchema() {
       theme TEXT DEFAULT 'dark',
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      received_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      processed_at DATETIME,
+      status TEXT NOT NULL
+    );
   `);
 
   // Safe idempotent column additions
@@ -453,6 +463,17 @@ export function initializeSchema() {
   safeAddColumn('applications', 'resume_version INTEGER DEFAULT 1');
   safeAddColumn('applications', 'is_outdated INTEGER DEFAULT 0');
   safeAddColumn('applications', 'outdated_reason TEXT');
+  safeAddColumn('applications', 'submission_confirmed_at DATETIME');
+  safeAddColumn('applications', 'candidate_submission_notes TEXT');
+  safeAddColumn('applications', 'employer_confirmation_received_at DATETIME');
+  safeAddColumn('applications', 'employer_confirmation_evidence_type TEXT');
+  safeAddColumn('applications', 'employer_confirmation_evidence TEXT');
+  safeAddColumn('applications', 'evidence_status TEXT DEFAULT NULL');
+
+  // Email delivery truthfulness columns
+  safeAddColumn('emails', 'provider_message_id TEXT');
+  safeAddColumn('emails', "delivery_status TEXT DEFAULT 'draft'");
+  safeAddColumn('emails', 'delivery_provider TEXT');
 
   // Resume versioning and isolation columns
   safeAddColumn('resumes', 'original_filename TEXT');

@@ -14,24 +14,36 @@ export type FreshnessTier =
   | 'Archived';
 
 export type VerificationStatus =
-  | 'Verified Open'
+  | 'Curated Listing'
+  | 'Live Status Confirmed'
   | 'Open, Date Unconfirmed'
+  | 'Needs Verification'
+  | 'Redirect Pending'
+  | 'Access Blocked'
   | 'Unverified'
   | 'Expired'
   | 'Closed'
   | 'Broken Link'
-  | 'Redirected'
-  | 'Suspicious';
+  | 'Suspicious'
+  | 'Synthetic Benchmark'
+  | 'Verified Open'; // Legacy alias
 
 export interface VerificationEvidence {
-  http_status: number;
-  is_active: boolean;
+  verification_method: 'static_syntax_and_domain_heuristic' | 'live_http_probe' | 'employer_api' | 'synthetic_benchmark';
+  source_url: string;
   domain: string;
+  http_status: number | null; // Null when no live network probe was executed
+  network_checked: boolean;
+  is_active: boolean;
   is_official_career_portal: boolean;
   is_recruiter_post: boolean;
   checked_at: string;
   notes: string;
+  verification_limitations: string;
 }
+
+export const CURATED_LISTING_DISCLAIMER =
+  'Notice: Curated listings verify domain format and source structure, but do not guarantee that the employer has not filled or closed the requisition. Always verify current vacancy availability directly on the official employer portal.';
 
 export interface VerificationResult {
   is_verified: boolean;
@@ -130,14 +142,22 @@ export function verifyJobListing(job: JobListing): VerificationResult {
   const urlCheck = validateJobUrl(job.source_url);
   const portalUrlCheck = job.company_portal_url ? validateJobUrl(job.company_portal_url) : null;
 
-  let httpStatus = 200;
+  // IMPORTANT: Do NOT assume HTTP 200 without a live network request!
+  let httpStatus: number | null = null;
   let isBrokenLink = false;
+  const isSynthetic = Boolean(
+    job.id.includes('test_') ||
+    job.id.includes('fixture') ||
+    job.employer.includes('Fixture') ||
+    job.employer.includes('Heritage Retail') ||
+    job.employer.includes('Defunct Retail')
+  );
 
   if (!urlCheck.isValid || urlCheck.isBroken) {
-    httpStatus = 404;
+    httpStatus = null;
     isBrokenLink = true;
     trustScore = 15;
-    issues.push('Listing URL is broken or destination host is unreachable.');
+    issues.push('Listing URL syntax is invalid or domain pattern is known unreachable.');
   }
 
   // 2. Official career portal / platform legitimacy
@@ -187,10 +207,14 @@ export function verifyJobListing(job: JobListing): VerificationResult {
   const sources = job.sources_json ? JSON.parse(job.sources_json) : [];
   const isMultiSource = sources.length > 1;
 
-  // Determine final status
-  let status: VerificationStatus = 'Verified Open';
+  // Determine truthful status
+  let status: VerificationStatus = 'Curated Listing';
+  let method: VerificationEvidence['verification_method'] = 'static_syntax_and_domain_heuristic';
 
-  if (isSuspicious) {
+  if (isSynthetic) {
+    status = 'Synthetic Benchmark';
+    method = 'synthetic_benchmark';
+  } else if (isSuspicious) {
     status = 'Suspicious';
   } else if (isBrokenLink) {
     status = 'Broken Link';
@@ -200,22 +224,27 @@ export function verifyJobListing(job: JobListing): VerificationResult {
     status = 'Unverified';
   } else if (!pubDate) {
     status = 'Open, Date Unconfirmed';
-  } else if (trustScore >= 80) {
-    status = 'Verified Open';
+  } else if (trustScore >= 70) {
+    // Truthful classification: format and domain verified, but active vacancy unconfirmed by employer API
+    status = 'Curated Listing';
   } else {
     status = 'Unverified';
   }
 
-  const isVerified = (status === 'Verified Open' || status === 'Open, Date Unconfirmed') && trustScore >= 70 && !isBrokenLink && !isSuspicious;
+  const isVerified = (status === 'Curated Listing' || status === 'Open, Date Unconfirmed') && trustScore >= 70 && !isBrokenLink && !isSuspicious;
 
   const evidence: VerificationEvidence = {
-    http_status: httpStatus,
-    is_active: !isBrokenLink && !isExpired && !isSuspicious,
+    verification_method: method,
+    source_url: job.source_url,
     domain: urlCheck.domain || 'direct',
+    http_status: httpStatus,
+    network_checked: false,
+    is_active: !isBrokenLink && !isExpired && !isSuspicious,
     is_official_career_portal: Boolean(job.company_portal_url || /taleo|workday|greenhouse|lever|careers/i.test(job.source_url)),
     is_recruiter_post: /recruiter|post|linkedin_message/i.test(job.application_type || ''),
     checked_at: new Date().toISOString(),
-    notes: issues.length > 0 ? issues.join('; ') : 'All origin indicators verified.'
+    notes: issues.length > 0 ? issues.join('; ') : 'Domain syntax, format, and requirements structure verified.',
+    verification_limitations: 'Static syntax and domain format validation only. Does not verify whether the employer has closed or filled the position.'
   };
 
   return {

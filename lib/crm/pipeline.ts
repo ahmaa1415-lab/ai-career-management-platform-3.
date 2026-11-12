@@ -1,5 +1,6 @@
 import db, { logAudit, getOrCreateDefaultUser } from '../db';
 import { ApplicationRecord, PIPELINE_STAGES, PipelineStage } from '../types';
+import { normalizeApplicationStatus } from '../applications/workflow';
 
 export { PIPELINE_STAGES };
 export type { PipelineStage };
@@ -38,7 +39,8 @@ export function getAllApplications(userId?: string, filterStatus?: string, searc
     id: r.id,
     user_id: r.user_id,
     job_id: r.job_id,
-    status: r.status,
+    status: normalizeApplicationStatus(r.status, r) as PipelineStage,
+    raw_status: r.status,
     match_score: r.match_score,
     match_details_json: r.match_details_json,
     tailored_cv_id: r.tailored_cv_id,
@@ -50,6 +52,12 @@ export function getAllApplications(userId?: string, filterStatus?: string, searc
     submission_type: r.submission_type,
     submission_confirmed: r.submission_confirmed,
     applied_at: r.applied_at,
+    submission_confirmed_at: r.submission_confirmed_at,
+    candidate_submission_notes: r.candidate_submission_notes,
+    employer_confirmation_received_at: r.employer_confirmation_received_at,
+    employer_confirmation_evidence_type: r.employer_confirmation_evidence_type,
+    employer_confirmation_evidence: r.employer_confirmation_evidence,
+    evidence_status: r.evidence_status,
     recruiter_name: r.recruiter_name,
     recruiter_email: r.recruiter_email,
     notes: r.notes,
@@ -100,28 +108,32 @@ export function updateApplicationStatus(
 ): ApplicationRecord {
   const user = userId || 'default-user';
 
-  // State guard: if moving to 'Applied', ensure human approval was granted
-  if (newStatus === 'Applied') {
-    const existing = db.prepare('SELECT human_approved FROM applications WHERE id = ?').get(applicationId) as any;
-    if (!existing || existing.human_approved !== 1) {
-      throw new Error('Approval Center Gate: Cannot advance status to "Applied" without prior human approval.');
-    }
+  // Step 4 Guard: Prevent manual CRM stage mutations from fabricating confirmed submissions or verified receipts
+  if (newStatus === 'Submitted by Candidate') {
+    throw new Error('Action Prohibited: "Submitted by Candidate" requires explicit candidate confirmation via the candidate submission workflow.');
   }
+  if (newStatus === 'Employer Confirmation Independently Verified') {
+    throw new Error('Action Prohibited: "Employer Confirmation Independently Verified" requires an authenticated employer webhook callback.');
+  }
+  if (newStatus === 'Candidate Evidence Provided') {
+    throw new Error('Action Prohibited: "Candidate Evidence Provided" requires evidence upload via the confirmation receipt workflow.');
+  }
+
+  // If newStatus is legacy 'Applied', treat it as 'Legacy Applied – Unverified'
+  const normalizedStatus = (newStatus === 'Applied' || newStatus === ('Legacy Applied - Unverified' as any))
+    ? 'Legacy Applied – Unverified'
+    : newStatus;
 
   let updateQuery = `
     UPDATE applications
     SET status = ?,
         updated_at = CURRENT_TIMESTAMP
   `;
-  const params: any[] = [newStatus];
+  const params: any[] = [normalizedStatus];
 
   if (notes) {
     updateQuery += ', notes = ?';
     params.push(notes);
-  }
-
-  if (newStatus === 'Applied') {
-    updateQuery += ', submission_confirmed = 1, applied_at = CURRENT_TIMESTAMP';
   }
 
   updateQuery += ' WHERE id = ?';
@@ -131,11 +143,13 @@ export function updateApplicationStatus(
 
   logAudit('CRM_STATUS_UPDATED', {
     application_id: applicationId,
-    new_status: newStatus,
+    new_status: normalizedStatus,
     notes
   }, user);
 
-  return getAllApplications().find(a => a.id === applicationId)!;
+  const existingApp = db.prepare('SELECT user_id FROM applications WHERE id = ?').get(applicationId) as any;
+  const targetUserId = existingApp?.user_id || user;
+  return getAllApplications(targetUserId).find(a => a.id === applicationId)!;
 }
 
 export function exportCRMDataAsJSON(userId?: string): string {

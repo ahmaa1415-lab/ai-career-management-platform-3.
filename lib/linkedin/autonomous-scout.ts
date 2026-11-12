@@ -517,14 +517,14 @@ ${post.raw_text}`;
 
   const appId = `app_scout_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
-  // 2. Register Application in CRM first to satisfy foreign key constraints
+  // 2. Register Application in CRM as 'Package Prepared' (truthful lifecycle)
   db.prepare(`
     INSERT INTO applications (
       id, user_id, job_id, status, match_score, match_details_json,
       tailored_cv_id, cover_letter, screening_responses, disclosures_accepted,
       human_approved, approved_at, submission_type, submission_confirmed,
       applied_at, recruiter_name, recruiter_email, notes
-    ) VALUES (?, ?, ?, 'Applied', ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP, 'Automated', 1, CURRENT_TIMESTAMP, ?, ?, ?)
+    ) VALUES (?, ?, ?, 'Package Prepared', ?, ?, ?, ?, ?, 1, 0, null, 'Manual', 0, null, ?, ?, ?)
   `).run(
     appId,
     userId,
@@ -536,7 +536,7 @@ ${post.raw_text}`;
     JSON.stringify(tailoredPkg.screening_responses),
     post.author_name,
     role.target_contact,
-    `Application dispatched for ${role.title} at ${post.employer}.`
+    `Tailored application package prepared for ${role.title} at ${post.employer}. Ready for candidate review.`
   );
 
   let channelDetails: MultiChannelDispatchResult['details'] = {};
@@ -544,11 +544,11 @@ ${post.raw_text}`;
   let noteText = '';
 
   // --------------------------------------------------------------------------
-  // CHANNEL A: Gmail Direct Recruiter Email
+  // CHANNEL A: Gmail Direct Recruiter Email (Drafted for Candidate Review)
   // --------------------------------------------------------------------------
   if (channel === 'gmail') {
-    channelLabel = '✉️ Direct Recruiter Email (via Connected Gmail)';
-    const emailSubject = `Application: ${role.title} - ${candName} (Dubai / UAE Relocation)`;
+    channelLabel = '✉️ Recruiter Outreach Draft (Saved in Mailbox for Review)';
+    const emailSubject = `[Draft] Application: ${role.title} - ${candName} (Dubai / UAE Relocation)`;
     const emailBody = `Dear ${post.author_name},
 
 I saw your hiring post on LinkedIn regarding the ${role.title} opening at ${post.employer} in Dubai.
@@ -568,7 +568,7 @@ LinkedIn: ${candLinkedIn}`;
     const emailId = `email_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     db.prepare(`
       INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-      VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
+      VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
     `).run(emailId, appId, candEmail, role.target_contact, emailSubject, emailBody);
 
     channelDetails = {
@@ -576,17 +576,17 @@ LinkedIn: ${candLinkedIn}`;
       email_subject: emailSubject,
       email_preview: emailBody
     };
-    noteText = `Dispatched directly to recruiter inbox ${role.target_contact} via connected Gmail. Tailored CV attached: ${cvTitle}.pdf`;
+    noteText = `Recruiter outreach drafted for ${role.target_contact}. Tailored CV prepared: ${cvTitle}.pdf. Review and send from candidate mailbox.`;
   }
 
   // --------------------------------------------------------------------------
-  // CHANNEL B: Company Career Portal (Workday, Taleo, Custom)
+  // CHANNEL B: Company Career Portal Tracking Guide
   // --------------------------------------------------------------------------
   else if (channel === 'company_portal') {
-    channelLabel = '🌐 Company Career Portal Account (Auto-Created & Submitted)';
+    channelLabel = '🌐 Company Career Portal Tracking Guide (Ready for Candidate Submission)';
     const portalUrl = role.portal_url || `https://careers.${empSlug}.com/apply`;
     const portalPlatform = portalUrl.includes('workday') ? 'Workday' : portalUrl.includes('taleo') ? 'Taleo' : 'Custom Enterprise';
-    const confRef = `CONF-${post.employer.toUpperCase().slice(0, 4)}-${Math.floor(100000 + Math.random() * 900000)}`;
+    const trackingRef = `TRACK-${post.employer.toUpperCase().slice(0, 4)}-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const portalAcc = autoProvisionCompanyPortalAccount(
       userId,
@@ -595,27 +595,27 @@ LinkedIn: ${candLinkedIn}`;
       appId
     );
 
-    // Update portal record with confirmation
+    // Update portal record with tracking reference
     db.prepare(`
       UPDATE company_portal_accounts
-      SET confirmation_reference = ?, status = 'Registered & Applied', applied_at = CURRENT_TIMESTAMP
+      SET confirmation_reference = ?, status = 'Portal Tracker Initialized', updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(confRef, portalAcc.id);
+    `).run(trackingRef, portalAcc.id);
 
     channelDetails = {
       portal_platform: portalPlatform,
       portal_url: portalUrl,
       portal_username: portalAcc.account_email,
-      confirmation_reference: confRef
+      confirmation_reference: trackingRef
     };
-    noteText = `Auto-provisioned applicant account on ${post.employer} ${portalPlatform} portal (${candEmail}). Application submitted with Confirmation Reference: ${confRef}.`;
+    noteText = `Candidate portal guide initialized for ${post.employer} (${portalPlatform}). Submit directly on official portal: ${portalUrl}`;
   }
 
   // --------------------------------------------------------------------------
-  // CHANNEL C: LinkedIn Recruiter Direct Message / InMail
+  // CHANNEL C: LinkedIn Recruiter Direct Message / InMail (Drafted)
   // --------------------------------------------------------------------------
   else if (channel === 'linkedin_message') {
-    channelLabel = '💬 LinkedIn Recruiter Direct Message (InMail Outreach)';
+    channelLabel = '💬 LinkedIn Recruiter Direct Message (Drafted for Review)';
     const msgSubject = `Category Management Opportunity - ${candName}`;
     const msgBody = `Hi ${post.author_name.split(' ')[0]},
 
@@ -633,7 +633,7 @@ ${candName} (${candPhone})`;
       INSERT INTO linkedin_messages (
         id, application_id, user_id, recruiter_name, recruiter_profile_url,
         subject, message_body, sender_profile_url, status, sent_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Sent', CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Draft', CURRENT_TIMESTAMP)
     `).run(
       msgId,
       appId,
@@ -650,7 +650,7 @@ ${candName} (${candPhone})`;
       linkedin_recipient_url: post.author_profile_url,
       message_body: msgBody
     };
-    noteText = `Sent personalized recruiter InMail message directly to ${post.author_name} from Aya's connected LinkedIn account (${candLinkedIn}).`;
+    noteText = `Prepared personalized recruiter message for ${post.author_name}. Ready to review and send from LinkedIn Manager.`;
   }
 
   // Update application notes with final channel details
@@ -660,7 +660,7 @@ ${candName} (${candPhone})`;
     WHERE id = ?
   `).run(noteText, appId);
 
-  logAudit('LINKEDIN_AUTONOMOUS_SCOUT_APPLIED', {
+  logAudit('LINKEDIN_PACKAGE_PREPARED', {
     application_id: appId,
     employer: post.employer,
     role: role.title,
@@ -678,7 +678,7 @@ ${candName} (${candPhone})`;
     match_score: match.overall_score || 85,
     channel_used: channel as any,
     channel_label: channelLabel,
-    status: 'Applied',
+    status: 'Package Prepared' as any,
     applied_at: new Date().toISOString(),
     cv_title: cvTitle,
     details: channelDetails,
@@ -737,13 +737,13 @@ export function runAutonomousLinkedInAgent(userId?: string): AutonomousScoutResu
 
   return {
     success: true,
-    message: `Autonomous LinkedIn Agent completed search cycle across ${LIVE_LINKEDIN_HIRING_POSTS.length} posts. Dispatched ${dispatchedApplications.length} applications across Gmail, Company Portals, and LinkedIn InMail!`,
+    message: `LinkedIn Agent completed search cycle across ${LIVE_LINKEDIN_HIRING_POSTS.length} posts. Prepared ${dispatchedApplications.length} tailored packages ready for candidate review and submission!`,
     timestamp: new Date().toISOString(),
     linkedin_account: {
       name: liConnection.account_name,
       profile_url: liConnection.profile_url,
       status: liConnection.status,
-      mode: 'Active Autonomous Multi-Channel Execution'
+      mode: 'Active Multi-Channel Opportunity Preparation'
     },
     search_queries_executed: executedQueries,
     posts_scanned_count: LIVE_LINKEDIN_HIRING_POSTS.length,

@@ -96,9 +96,9 @@ export function detectPortalRequirement(job: JobListing): PortalRequirement {
 }
 
 /**
- * Automatically creates and registers a candidate account on the target company career portal,
- * generates secure credentials, fills the external application, links the tailored CV,
- * records the official reference number, and archives credentials in the candidate vault.
+ * Initializes a candidate portal tracking guide and preparatory reference for the target company career portal.
+ * This provides an internal candidate tracking guide to facilitate candidate-controlled submission on the employer's
+ * official portal. It does NOT impersonate employers, forge external confirmation numbers, or submit applications automatically.
  */
 export function autoProvisionCompanyPortalAccount(
   userId: string,
@@ -110,39 +110,44 @@ export function autoProvisionCompanyPortalAccount(
   const portalPlatform = requirement.portalPlatform;
   const portalUrl = requirement.portalUrl;
 
-  // Check if an account already exists for this employer and user
+  // Check if a portal tracking record already exists for this employer and user
   const existing = db.prepare(`
     SELECT * FROM company_portal_accounts WHERE user_id = ? AND employer = ?
   `).get(userId, job.employer) as any;
 
-  // Generate unique confirmation reference code
+  // Internal candidate tracking reference (clearly identified as internal platform tracker)
   const empCode = job.employer.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() || 'EMP';
   const now = new Date();
   const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
   const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const confirmationReference = existing?.confirmation_reference || `APP-${empCode}-${yearMonth}-${randomSuffix}`;
+  const internalTrackingReference = existing?.confirmation_reference || `TRACK-${empCode}-${yearMonth}-${randomSuffix}`;
 
-  const accountEmail = candidate.profile?.user_id ? 'candidate@example.com' : 'candidate@example.com';
-  const accountUsername = 'aya.developer';
-  const passwordHint = 'AutoProvisioned-Vault::CandidateAuth::Protected';
+  const accountEmail = candidate.profile?.email || 'candidate@example.com';
+  const accountUsername = candidate.profile?.email?.split('@')[0] || 'candidate';
+  const passwordHint = 'CandidateVault::SelfManaged';
 
   if (existing) {
     db.prepare(`
       UPDATE company_portal_accounts
       SET application_id = COALESCE(?, application_id),
           job_id = COALESCE(?, job_id),
-          status = 'Registered & Applied',
-          applied_at = CURRENT_TIMESTAMP,
+          status = 'Portal Tracker Initialized',
+          notes = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(applicationId || null, job.id, existing.id);
+    `).run(
+      applicationId || null,
+      job.id,
+      `Internal candidate portal tracking record updated for ${job.title} at ${job.employer}.`,
+      existing.id
+    );
 
     return {
       ...existing,
       application_id: applicationId || existing.application_id,
       job_id: job.id,
-      status: 'Registered & Applied',
-      applied_at: new Date().toISOString()
+      status: 'Portal Tracker Initialized',
+      applied_at: existing.applied_at
     };
   }
 
@@ -152,8 +157,8 @@ export function autoProvisionCompanyPortalAccount(
     INSERT INTO company_portal_accounts (
       id, user_id, job_id, application_id, employer, portal_platform,
       portal_url, account_email, account_username, password_hint,
-      status, confirmation_reference, applied_at, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Registered & Applied', ?, CURRENT_TIMESTAMP, ?)
+      status, confirmation_reference, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Portal Tracker Initialized', ?, ?)
   `).run(
     accountId,
     userId,
@@ -165,32 +170,31 @@ export function autoProvisionCompanyPortalAccount(
     accountEmail,
     accountUsername,
     passwordHint,
-    confirmationReference,
-    `Candidate account auto-created to apply to ${job.title} via ${portalPlatform} portal on company site.`
+    internalTrackingReference,
+    `Internal portal tracking guide initialized for ${job.title} via ${portalPlatform}. Official portal: ${portalUrl}`
   );
 
-  // Send an automated confirmation notification email to candidate recruitment inbox
-  const domain = job.employer.toLowerCase().replace(/[^a-z0-9]/g, '') + '.com';
+  // Send internal candidate tracking guide to candidate inbox (NEVER impersonating employer talent acquisition)
   const emailId = `email_cpa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
   
   db.prepare(`
     INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-    VALUES (?, ?, 'Confirmation', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
+    VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
   `).run(
     emailId,
     applicationId || null,
-    `${job.employer} Careers <talent-acquisition@${domain}>`,
+    'Career Platform Portal Assistant <portal-assistant@career-platform.local>',
     accountEmail,
-    `Account Created & Application Confirmed: ${job.title} (${confirmationReference})`,
-    `Dear Aya Developer,\n\nThank you for applying to ${job.employer} for the position of **${job.title}**.\n\nYour candidate account on the **${job.employer} Careers Portal (${portalPlatform})** has been automatically registered:\n\n- **Company Portal URL**: ${portalUrl}\n- **Candidate Email**: ${accountEmail}\n- **Application Reference**: ${confirmationReference}\n- **Application Status**: Submitted & Under Review\n\nYour tailored CV and screening answers have been uploaded and linked to your profile.\n\nBest regards,\n${job.employer} Talent Acquisition Team`
+    `[Candidate Tracking Guide] Application Preparation for ${job.employer} - ${job.title}`,
+    `[INTERNAL PLATFORM DEMO/TRACKING RECORD - NOT SENT BY EMPLOYER]\n\nDear Candidate,\n\nYour application package for ${job.title} at ${job.employer} is prepared in your Application Center.\n\n- Official Portal URL: ${portalUrl}\n- Portal Platform: ${portalPlatform}\n- Internal Tracking Reference: ${internalTrackingReference}\n- Recommended Action: Open the official employer portal link, sign in or register with your email (${accountEmail}), and submit your tailored CV and cover letter.\n\nImportant Note: This is an internal candidate workflow record. No external submission has been made to ${job.employer}. Once you complete your application on their portal, please confirm submission in your Application Workspace.\n\nCareer Management Platform`
   );
 
-  logAudit('COMPANY_PORTAL_ACCOUNT_AUTO_PROVISIONED', {
+  logAudit('COMPANY_PORTAL_TRACKER_INITIALIZED', {
     account_id: accountId,
     employer: job.employer,
     portal_platform: portalPlatform,
     portal_url: portalUrl,
-    confirmation_reference: confirmationReference
+    internal_tracking_reference: internalTrackingReference
   }, userId);
 
   return {
@@ -204,10 +208,10 @@ export function autoProvisionCompanyPortalAccount(
     account_email: accountEmail,
     account_username: accountUsername,
     password_hint: passwordHint,
-    status: 'Registered & Applied',
-    confirmation_reference: confirmationReference,
-    applied_at: new Date().toISOString(),
-    notes: `Candidate account auto-created to apply to ${job.title} via ${portalPlatform} portal on company site.`
+    status: 'Portal Tracker Initialized',
+    confirmation_reference: internalTrackingReference,
+    applied_at: undefined,
+    notes: `Internal portal tracking guide initialized for ${job.title} via ${portalPlatform}. Official portal: ${portalUrl}`
   };
 }
 
@@ -258,7 +262,7 @@ export function getCompanyPortalStats(userId?: string) {
 
   return {
     total_accounts: accounts.length,
-    active_accounts: accounts.filter(a => a.status === 'Active' || a.status === 'Registered & Applied').length,
+    active_accounts: accounts.filter(a => a.status === 'Active' || a.status === 'Portal Tracker Initialized' || a.status === 'Ready for Candidate Registration').length,
     platforms_breakdown: platforms,
     accounts
   };

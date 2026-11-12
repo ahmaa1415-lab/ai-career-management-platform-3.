@@ -206,7 +206,8 @@ export default function JobIntelligencePage() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                 >
                   <option value="All">All Verification Statuses</option>
-                  <option value="Verified Open">Verified Open</option>
+                  <option value="Curated Listing">Curated Listing (Format Verified)</option>
+                  <option value="Live Status Confirmed">Live Status Confirmed</option>
                   <option value="Open, Date Unconfirmed">Open, Date Unconfirmed</option>
                   <option value="Unverified">Unverified</option>
                   <option value="Broken Link">Broken Link</option>
@@ -220,6 +221,14 @@ export default function JobIntelligencePage() {
         {/* Tab 1: Opportunities List */}
         {activeTab === 'opportunities' && (
           <div className="space-y-4">
+            {/* Verification Disclaimer Banner */}
+            <div className="bg-slate-900/90 border border-amber-500/30 rounded-xl p-4 flex items-start space-x-3 text-xs text-amber-200/90 shadow-sm">
+              <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div className="leading-relaxed">
+                <span className="font-semibold text-amber-300">Listing Verification Notice:</span> Curated listings verify domain format and source structure, but do not guarantee that the employer has not filled or closed the requisition. Always verify current vacancy availability directly on the official employer portal before applying.
+              </div>
+            </div>
+
             {filteredJobs.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
                 No matching opportunities found for your selected filters.
@@ -236,13 +245,13 @@ export default function JobIntelligencePage() {
                       <div className="flex-1">
                         <div className="flex flex-wrap items-center gap-2 mb-2">
                           <span className={`px-2 py-0.5 text-[11px] font-semibold rounded-full border ${
-                            job.verification_status === 'Verified Open'
+                            job.verification_status === 'Curated Listing' || job.verification_status === 'Live Status Confirmed' || job.verification_status === 'Verified Open'
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                               : job.verification_status === 'Broken Link'
                               ? 'bg-red-500/10 text-red-400 border-red-500/30'
                               : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                           }`}>
-                            {job.verification_status || 'Verified Open'}
+                            {job.verification_status === 'Verified Open' ? 'Curated Listing' : (job.verification_status || 'Curated Listing')}
                           </span>
 
                           <span className="px-2 py-0.5 text-[11px] bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded-full">

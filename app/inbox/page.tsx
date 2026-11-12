@@ -181,8 +181,16 @@ export default function InboxPage() {
                 <p className="text-[11px] text-slate-400 truncate mt-1">{email.body}</p>
 
                 <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-800/60 text-[10px]">
-                  <span className={email.is_draft ? 'text-amber-400 font-semibold' : email.is_sent ? 'text-emerald-400 font-semibold' : 'text-slate-400'}>
-                    {email.is_draft ? 'Draft (Unsent)' : email.is_sent ? 'Dispatched ✓' : 'Received Inbound'}
+                  <span className={
+                    email.is_draft ? 'text-amber-400 font-semibold'
+                    : (email as any).delivery_status === 'sandbox_recorded' ? 'text-cyan-400 font-semibold'
+                    : email.is_sent ? 'text-emerald-400 font-semibold'
+                    : 'text-slate-400'
+                  }>
+                    {email.is_draft ? 'Draft (Unsent)'
+                      : (email as any).delivery_status === 'sandbox_recorded' ? 'Sandbox Recorded (Simulated)'
+                      : email.is_sent ? 'Dispatched via Gateway ✓'
+                      : 'Received Inbound'}
                   </span>
                   <span className="text-slate-400">{email.created_at ? email.created_at.split(' ')[0] : 'Recent'}</span>
                 </div>
@@ -253,7 +261,12 @@ export default function InboxPage() {
                 </div>
 
                 <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                  <span>Status: {selectedEmail.is_draft ? 'Draft Mode (Safe)' : selectedEmail.is_sent ? 'Sent via Mail Gateway' : 'Inbound Recruiter Mail'}</span>
+                  <span>Status: {
+                    selectedEmail.is_draft ? 'Draft Mode (Safe)'
+                    : (selectedEmail as any).delivery_status === 'sandbox_recorded' ? 'Sandbox Recorded (Safe Simulation - No External SMTP)'
+                    : selectedEmail.is_sent ? 'Sent via Verified Mail Gateway'
+                    : 'Inbound Recruiter Mail'
+                  }</span>
                   <span>Safety Guard: Dual Human Confirmation Required</span>
                 </div>
               </div>

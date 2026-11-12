@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import { ApplicationRecord } from '@/lib/types';
+import { classifyApplicationLifecycle, calculateApplicationKPIs } from '@/lib/applications/lifecycle';
 import {
   Briefcase,
   FileText,
@@ -26,13 +27,17 @@ export default function ApplicationsPage() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [candidateProfile, setCandidateProfile] = useState<any>(null);
 
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [evidenceRef, setEvidenceRef] = useState('');
+  const [submittingConfirm, setSubmittingConfirm] = useState(false);
+
   useEffect(() => {
     fetchApplications();
   }, []);
 
-  const handleApplyEverywhere = async () => {
+  const handlePrepareAllPackages = async () => {
     setRunningAutopilot(true);
-    setActionMessage('⚡ Initiating autonomous autopilot across all platforms...');
+    setActionMessage('⚡ Generating tailored application packages for all matching vacancies...');
     try {
       let res: Response | null = null;
       let lastErr: any = null;
@@ -59,13 +64,64 @@ export default function ApplicationsPage() {
       }
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Auto-apply failed');
-      setActionMessage(`⚡ ${data.message} (${data.newly_applied_count} newly applied, ${data.total_applied_in_system} total in CRM)`);
+      if (!res.ok) throw new Error(data.error || 'Package generation failed');
+      setActionMessage(`⚡ ${data.message} (${data.newly_applied_count || 0} newly prepared)`);
       await fetchApplications();
     } catch (err: any) {
-      setActionMessage(`Auto-apply notice: ${err.message}. Click button to retry.`);
+      setActionMessage(`Package generation notice: ${err.message}. Click button to retry.`);
     } finally {
       setRunningAutopilot(false);
+    }
+  };
+
+  const handleCandidateConfirmSubmission = async (appId: string) => {
+    try {
+      setActionMessage('Confirming candidate submission on official portal...');
+      const res = await fetch('/api/applications/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          application_id: appId,
+          candidate_confirmed: true,
+          notes: 'Candidate confirmed manual submission on official employer career portal.'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Submission confirmation failed');
+      setActionMessage('✓ Application status updated: Submitted by Candidate!');
+      await fetchApplications();
+    } catch (err: any) {
+      setActionMessage(`Error: ${err.message}`);
+    }
+  };
+
+  const handleRecordEmployerConfirmation = async (appId: string) => {
+    if (!evidenceRef.trim()) {
+      alert('Please enter an application reference number or confirmation ID.');
+      return;
+    }
+    setSubmittingConfirm(true);
+    try {
+      const res = await fetch('/api/applications/confirm-receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          application_id: appId,
+          confirmation_reference: evidenceRef.trim(),
+          evidence_type: 'candidate_receipt',
+          notes: 'Candidate verified confirmation receipt from employer.'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to record confirmation');
+      setActionMessage('✓ Candidate confirmation evidence successfully recorded! Pending independent employer verification.');
+      setShowConfirmModal(false);
+      setEvidenceRef('');
+      await fetchApplications();
+    } catch (err: any) {
+      setActionMessage(`Error: ${err.message}`);
+    } finally {
+      setSubmittingConfirm(false);
     }
   };
 
@@ -123,25 +179,25 @@ export default function ApplicationsPage() {
           </div>
         )}
 
-        {/* Autonomous Apply Everywhere Banner */}
+        {/* Application Package Generator Banner */}
         <div className="bg-gradient-to-r from-blue-950/40 via-emerald-950/30 to-slate-900 border border-emerald-500/30 rounded-xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              <h3 className="text-sm font-bold text-white">Autonomous Autopilot: Apply Everywhere on My Behalf</h3>
+              <h3 className="text-sm font-bold text-white">Application Package Generator: Prepare All Matches</h3>
             </div>
             <p className="text-xs text-slate-300">
-              Dispatches tailored Version B CVs, custom cover letters, and verified applications across LinkedIn, RemoteOK, Bayt, Indeed, Wuzzuf, GulfTalent, and direct company careers portals.
+              Generates bespoke Version B CVs, custom cover letters, and screening answers for your review, ready for submission on official employer portals.
             </p>
           </div>
           <button
             type="button"
-            onClick={handleApplyEverywhere}
+            onClick={handlePrepareAllPackages}
             disabled={runningAutopilot}
             className="w-full md:w-auto px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center space-x-2 flex-shrink-0 transition-colors shadow-md"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>{runningAutopilot ? 'Applying Everywhere...' : '⚡ Apply Everywhere Autonomously'}</span>
+            <span>{runningAutopilot ? 'Preparing Packages...' : '⚡ Prepare Packages for All Matches'}</span>
           </button>
         </div>
 
@@ -173,15 +229,51 @@ export default function ApplicationsPage() {
                     <h4 className="text-xs font-bold text-slate-100">{app.job?.title}</h4>
                     <p className="text-[11px] text-slate-400 mt-0.5">{app.job?.employer}</p>
                   </div>
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
-                    app.status === 'Approval Pending'
-                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                      : app.status === 'Applied'
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : 'bg-slate-800 text-slate-300 border-slate-700'
-                  }`}>
-                    {app.status}
-                  </span>
+                  {(() => {
+                    const lifecycle = classifyApplicationLifecycle(app);
+                    const getBadgeClass = () => {
+                      switch (lifecycle) {
+                        case 'Employer Confirmation Independently Verified':
+                          return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+                        case 'Candidate Evidence Provided':
+                          return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
+                        case 'Submitted by Candidate':
+                          return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+                        case 'Ready for Candidate Submission':
+                          return 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20';
+                        case 'Package Prepared':
+                        case 'Approval Pending':
+                          return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+                        case 'Legacy Applied – Unverified':
+                        default:
+                          return 'bg-slate-700/50 text-slate-300 border-slate-600';
+                      }
+                    };
+                    const getBadgeText = () => {
+                      switch (lifecycle) {
+                        case 'Employer Confirmation Independently Verified':
+                          return 'Employer Confirmed (Verified)';
+                        case 'Candidate Evidence Provided':
+                          return 'Candidate Evidence Provided';
+                        case 'Submitted by Candidate':
+                          return 'Submitted by Candidate';
+                        case 'Ready for Candidate Submission':
+                          return 'Ready for Candidate Submission';
+                        case 'Package Prepared':
+                        case 'Approval Pending':
+                          return 'Package Prepared';
+                        case 'Legacy Applied – Unverified':
+                          return 'Legacy Applied (Unverified)';
+                        default:
+                          return lifecycle;
+                      }
+                    };
+                    return (
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${getBadgeClass()}`}>
+                        {getBadgeText()}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div className="flex items-center justify-between mt-3 text-[11px] text-slate-400 pt-2 border-t border-slate-800/60">
@@ -204,22 +296,43 @@ export default function ApplicationsPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                  {selectedApp.status === 'Approval Pending' && (
+                  {(selectedApp.status === 'Package Prepared' || selectedApp.status === 'Approval Pending') && (
                     <Link
                       href="/approvals"
-                      className="w-full sm:w-auto px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center space-x-1 shadow-sm"
+                      className="w-full sm:w-auto px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center space-x-1 shadow-sm"
                     >
                       <ShieldAlert className="w-3.5 h-3.5" />
                       <span>Review in Approval Center</span>
                     </Link>
                   )}
-                  {selectedApp.job?.source_url && (
+                  {(selectedApp.status === 'Ready for Candidate Submission' || selectedApp.status === 'Ready to Apply') && (
+                    <button
+                      type="button"
+                      onClick={() => handleCandidateConfirmSubmission(selectedApp.id)}
+                      className="w-full sm:w-auto px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center justify-center space-x-1 shadow-sm"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Confirm I Have Submitted</span>
+                    </button>
+                  )}
+                  {(selectedApp.status === 'Submitted by Candidate' || selectedApp.status === 'Applied') && (
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmModal(true)}
+                      className="w-full sm:w-auto px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg text-xs flex items-center justify-center space-x-1 shadow-sm"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Record Confirmation</span>
+                    </button>
+                  )}
+                  {(selectedApp.job?.company_portal_url || selectedApp.job?.source_url) && (
                     <a
-                      href={selectedApp.job.source_url}
+                      href={selectedApp.job?.company_portal_url || selectedApp.job?.source_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs border border-slate-700"
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 font-semibold rounded-lg text-xs border border-slate-700 flex items-center gap-1.5"
                     >
+                      <span>Open Employer Portal</span>
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                   )}
@@ -320,6 +433,58 @@ export default function ApplicationsPage() {
           )}
         </div>
         </div>
+
+        {/* Confirmation Modal */}
+        {showConfirmModal && selectedApp && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <h4 className="text-sm font-bold text-white">Record Candidate Confirmation Evidence</h4>
+                <button
+                  onClick={() => setShowConfirmModal(false)}
+                  className="text-slate-400 hover:text-white text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Enter the confirmation reference or requisition number provided by <strong>{selectedApp.job?.employer}</strong> upon your direct submission. This documentation will be stored as candidate self-reported evidence.
+              </p>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Candidate Submission Reference / Receipt:
+                </label>
+                <input
+                  type="text"
+                  value={evidenceRef}
+                  onChange={(e) => setEvidenceRef(e.target.value)}
+                  placeholder="e.g. REQ-98214, CAND-RECEIPT-2026"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmModal(false)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={submittingConfirm || !evidenceRef.trim()}
+                  onClick={() => handleRecordEmployerConfirmation(selectedApp.id)}
+                  className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold rounded-lg text-xs"
+                >
+                  {submittingConfirm ? 'Saving...' : 'Save Candidate Evidence'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

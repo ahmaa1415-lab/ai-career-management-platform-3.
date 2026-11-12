@@ -143,29 +143,36 @@ export function sendEmailWithApproval(
     throw new Error(`Email ${emailId} not found.`);
   }
 
-  // Check if live Google OAuth token exists (strictly disabled in STAGING_MODE)
+  // Step 6 Truthful Delivery Handling:
+  // External outbound email is strictly disabled without a live verified mail provider.
+  // In sandbox, staging, or local testing, emails are safely recorded as 'sandbox_recorded' with is_sent = 0.
+  // is_sent = 1 can ONLY be set when an external mail gateway returns a confirmed provider_message_id.
   const isStaging = process.env.STAGING_MODE === 'true';
-  const hasLiveOAuth = !isStaging && Boolean(process.env.GOOGLE_OAUTH_TOKEN && process.env.GOOGLE_OAUTH_TOKEN.length > 0);
+  const hasLiveCredentials = !isStaging && Boolean(process.env.LIVE_MAIL_PROVIDER_ENABLED === 'true' && process.env.GOOGLE_OAUTH_TOKEN && process.env.GOOGLE_OAUTH_TOKEN.length > 0);
 
-  if (hasLiveOAuth) {
-    // Dispatch via real Gmail API (when token provided)
-    // Here we record confirmed live transmission
+  if (hasLiveCredentials) {
+    // Reserved for verified live provider transmission returning provider_message_id
+    // Live integrations are intentionally out of scope for this phase
   }
 
-  // Mark sent in database
+  // Record safely as sandbox_recorded (is_sent = 0, is_draft = 0)
   db.prepare(`
     UPDATE emails
     SET is_draft = 0,
-        is_sent = 1,
+        is_sent = 0,
+        delivery_status = 'sandbox_recorded',
+        delivery_provider = 'sandbox_simulated',
         sent_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(emailId);
 
-  logAudit('EMAIL_DISPATCHED_CONFIRMED', {
+  logAudit('EMAIL_SANDBOX_RECORDED', {
     email_id: emailId,
     recipient: email.recipient,
     subject: email.subject,
-    mode: hasLiveOAuth ? 'Live Gmail API' : 'Sandbox Recruitment Gateway'
+    delivery_status: 'sandbox_recorded',
+    is_sent: 0,
+    mode: 'Sandbox Simulated Gateway'
   }, userId);
 
   const updated = db.prepare('SELECT * FROM emails WHERE id = ?').get(emailId) as RecruitmentEmail;
@@ -173,8 +180,6 @@ export function sendEmailWithApproval(
   return {
     success: true,
     email: updated,
-    message: hasLiveOAuth
-      ? 'Email successfully dispatched via connected Gmail API.'
-      : 'Email verified and recorded in Recruitment Mailbox (Sandbox mode: no external SMTP credentials configured).'
+    message: 'Email safely recorded in Sandbox Recruitment Mailbox (is_sent = 0: no external SMTP credentials configured).'
   };
 }

@@ -35,6 +35,7 @@ import {
 import type { ExtractedCVProfile } from '@/lib/cv-extractor';
 import type { OptimizedMasterCVResult, PreliminaryCareerStrategy } from '@/lib/cv-optimizer';
 import type { JobListing, MatchBreakdown, ApplicationRecord, ResumeRecord } from '@/lib/types';
+import { classifyApplicationLifecycle } from '@/lib/applications/lifecycle';
 import CountryMultiSelect from '@/components/CountryMultiSelect';
 
 // Helper function to calculate job recency and freshness badge
@@ -617,7 +618,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Global Autonomous Autopilot Action Banner */}
+        {/* Global Autonomous Package Generator Action Banner */}
         <div className="bg-gradient-to-r from-blue-950/40 via-emerald-950/30 to-slate-900 border border-emerald-500/40 rounded-xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg">
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
@@ -626,14 +627,14 @@ export default function DashboardPage() {
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
               </span>
               <h3 className="text-sm font-bold text-white flex items-center space-x-2">
-                <span>Autonomous Autopilot: Apply Everywhere on My Behalf</span>
+                <span>Application Package Generator: Prepare All Matches</span>
                 <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
                   Continuous Mode Active
                 </span>
               </h3>
             </div>
             <p className="text-xs text-slate-300 max-w-3xl">
-              Antigravity autonomously discovers matching vacancies across <strong>LinkedIn, RemoteOK, Bayt, Indeed, Wuzzuf, GulfTalent, and direct company careers portals</strong>, tailors Version B CVs, customizes cover letters, and submits verified applications on your behalf automatically.
+              Antigravity discovers matching vacancies across <strong>LinkedIn, RemoteOK, Bayt, Indeed, Wuzzuf, GulfTalent, and direct company careers portals</strong>, tailors Version B CVs, customizes cover letters, and organizes verified application packages ready for your review and submission.
             </p>
           </div>
 
@@ -653,7 +654,7 @@ export default function DashboardPage() {
               className="w-full md:w-auto px-5 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-extrabold rounded-lg text-xs flex items-center justify-center space-x-2 flex-shrink-0 transition-all shadow-md cursor-pointer whitespace-nowrap"
             >
               <RefreshCw className={`w-4 h-4 ${runningAutopilot ? 'animate-spin' : ''}`} />
-              <span>{runningAutopilot ? 'Applying Everywhere...' : '⚡ Apply Everywhere Autonomously'}</span>
+              <span>{runningAutopilot ? 'Preparing Packages...' : '⚡ Prepare Packages for All Matches'}</span>
             </button>
           </div>
         </div>
@@ -1119,7 +1120,16 @@ export default function DashboardPage() {
                       const tailoredText = matchingTailored?.raw_text || (optimizedCV?.version_b_optimized?.raw_text || cvText);
                       const coverLetterText = matchingApp?.cover_letter || `Dear Hiring Team at ${item.job.employer},\n\nI am writing to express my strong interest in the ${item.job.title} role. With my background in ${extractedData?.current_headline || 'this field'} and demonstrated professional achievements, I am confident in my ability to deliver immediate value to your team.\n\nI look forward to discussing how my qualifications align with your strategic objectives.\n\nSincerely,\n${candName}${candPhone ? '\n' + candPhone : ''}${candEmail ? ' | ' + candEmail : ''}`;
 
-                      const isApproved = matchingApp?.human_approved === 1 || matchingApp?.status === 'Ready to Apply' || matchingApp?.status === 'Applied';
+                      const lifecycle = matchingApp ? classifyApplicationLifecycle(matchingApp) : null;
+                      const isApproved = matchingApp?.human_approved === 1 || lifecycle === 'Ready for Candidate Submission' || lifecycle === 'Submitted by Candidate' || lifecycle === 'Employer Confirmation Independently Verified';
+
+                      const getSubmissionBadgeText = () => {
+                        if (lifecycle === 'Employer Confirmation Independently Verified') return '🛡️ Employer Verified';
+                        if (lifecycle === 'Submitted by Candidate') return '✓ Submitted by Candidate';
+                        if (lifecycle === 'Candidate Evidence Provided') return '📄 Evidence Provided';
+                        if (lifecycle === 'Legacy Applied – Unverified') return '⚠️ Legacy Application';
+                        return '✓ Human Approved';
+                      };
 
                       return (
                         <div
@@ -1159,7 +1169,7 @@ export default function DashboardPage() {
                               {isApproved ? (
                                 <span className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-bold">
                                   <CheckCheck className="w-4 h-4" />
-                                  <span>{matchingApp?.status === 'Applied' ? '✓ Submitted & In CRM' : '✓ Human Approved'}</span>
+                                  <span>{getSubmissionBadgeText()}</span>
                                 </span>
                               ) : (
                                 <button

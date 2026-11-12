@@ -283,7 +283,7 @@ export const applicationTrackingAgent: AgentContract<{ action: 'auto_apply' | 'd
   ],
   execute: ({ action, userId }) => {
     const res = runAutonomousLinkedInAgent(userId);
-    logAudit('AGENT_APPLICATION_MANAGEMENT_EXECUTED', { dispatched: res.applications_dispatched_count }, userId);
+    logAudit('AGENT_APPLICATION_MANAGEMENT_EXECUTED', { packages_prepared: res.applications_dispatched_count }, userId);
     return res;
   }
 };
@@ -348,7 +348,7 @@ export const orchestratorAgent = {
       topPackage = applicationPreparationAgent.execute({ candidate: verifiedProfile, job: matches[0].job }, user.id);
     }
 
-    // 7. LinkedIn Autonomous Search & Multi-Channel Dispatch
+    // 7. LinkedIn Autonomous Search & Package Preparation
     const dispatchResult = applicationTrackingAgent.execute({ action: 'auto_apply', userId: user.id });
 
     // 8. Daily Executive Analytics
@@ -356,7 +356,7 @@ export const orchestratorAgent = {
 
     logAudit('ORCHESTRATOR_PIPELINE_COMPLETED', {
       jobs_matched: matches.length,
-      dispatched: dispatchResult.applications_dispatched_count
+      packages_prepared: dispatchResult.applications_dispatched_count
     }, user.id);
 
     return {

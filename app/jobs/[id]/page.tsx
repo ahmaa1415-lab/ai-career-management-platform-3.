@@ -109,7 +109,7 @@ export default function JobDetailPage() {
   const isDisqualified = jobFit?.is_disqualified;
   const fitScore = jobFit?.overall_score || job.job_fit_score || 0;
   const freshness = job.freshness_classification || verification?.freshness || 'Recent';
-  const verStatus = job.verification_status || verification?.status || 'Verified Open';
+  const verStatus = job.verification_status || verification?.status || 'Curated Listing';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-16">
@@ -128,6 +128,14 @@ export default function JobDetailPage() {
           )}
         </div>
 
+        {/* Verification Disclaimer Banner */}
+        <div className="bg-slate-900/90 border border-amber-500/30 rounded-xl p-4 mb-6 flex items-start space-x-3 text-xs text-amber-200/90 shadow-sm">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="leading-relaxed">
+            <span className="font-semibold text-amber-300">Listing Verification Notice:</span> Curated listings verify domain format and source structure, but do not guarantee that the employer has not filled or closed the requisition. Always verify current vacancy availability directly on the official employer portal before applying.
+          </div>
+        </div>
+
         {/* Opportunity Hero Header Card */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 mb-6 shadow-xl relative overflow-hidden">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
@@ -135,14 +143,14 @@ export default function JobDetailPage() {
               <div className="flex flex-wrap items-center gap-2.5 mb-3">
                 {/* Verification Status Badge */}
                 <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border flex items-center gap-1.5 ${
-                  verStatus === 'Verified Open'
+                  verStatus === 'Curated Listing' || verStatus === 'Live Status Confirmed' || verStatus === 'Verified Open'
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                     : verStatus === 'Broken Link'
                     ? 'bg-red-500/10 text-red-400 border-red-500/30'
                     : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                 }`}>
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  {verStatus}
+                  {verStatus === 'Verified Open' ? 'Curated Listing' : verStatus}
                 </span>
 
                 {/* Freshness Badge */}
@@ -509,7 +517,7 @@ export default function JobDetailPage() {
         {/* Tab 5: Application Routes */}
         {activeTab === 'application' && (
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 sm:p-8 space-y-6">
-            <h3 className="text-base font-bold text-slate-100">Application Dispatch Options</h3>
+            <h3 className="text-base font-bold text-slate-100">Application Submission Options</h3>
             <p className="text-xs text-slate-400">Choose how to submit your tailored application package to {job.employer}.</p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

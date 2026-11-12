@@ -61,8 +61,8 @@ export default function ApprovalsPage() {
     }
   };
 
-  const pendingApprovals = applications.filter(a => a.status === 'Approval Pending');
-  const readyToSubmit = applications.filter(a => a.status === 'Ready to Apply');
+  const pendingApprovals = applications.filter(a => a.status === 'Approval Pending' || a.status === 'Package Prepared');
+  const readyToSubmit = applications.filter(a => a.status === 'Ready to Apply' || a.status === 'Ready for Candidate Submission');
 
   const handleApprove = async (appId: string) => {
     setProcessingId(appId);
@@ -79,7 +79,7 @@ export default function ApprovalsPage() {
         throw new Error(errJson.error || 'Failed to approve package.');
       }
 
-      setActionMessage('Application package approved! Moved to "Ready to Apply".');
+      setActionMessage('Application package approved! Moved to "Ready for Candidate Submission".');
       await fetchApplications();
     } catch (err: any) {
       setActionMessage(`Error: ${err.message}`);
@@ -95,7 +95,11 @@ export default function ApprovalsPage() {
       const res = await fetch('/api/applications/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ application_id: appId, notes: 'Submitted via direct official portal link with verified tailored package.' }),
+        body: JSON.stringify({
+          application_id: appId,
+          candidate_confirmed: true,
+          notes: 'Candidate confirmed manual submission on official employer career portal.'
+        }),
       });
 
       if (!res.ok) {
@@ -103,7 +107,7 @@ export default function ApprovalsPage() {
         throw new Error(errJson.error || 'Failed to record submission.');
       }
 
-      setActionMessage('Submission confirmed and recorded! Application moved to "Applied" in CRM.');
+      setActionMessage('✓ Submission confirmed! Application moved to "Submitted by Candidate" in CRM.');
       await fetchApplications();
     } catch (err: any) {
       setActionMessage(`Error: ${err.message}`);
@@ -127,15 +131,15 @@ export default function ApprovalsPage() {
           </div>
         )}
 
-        {/* Autonomous Autopilot Banner */}
+        {/* Application Package Generator Banner */}
         <div className="bg-gradient-to-r from-blue-950/40 via-emerald-950/30 to-slate-900 border border-emerald-500/30 rounded-xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              <h3 className="text-sm font-bold text-white">Autonomous Autopilot: Apply Everywhere on My Behalf</h3>
+              <h3 className="text-sm font-bold text-white">Application Package Generator: Prepare All Matches</h3>
             </div>
             <p className="text-xs text-slate-300">
-              Grant delegated autonomous authority to automatically approve, tailor, and submit applications across LinkedIn, RemoteOK, Bayt, Indeed, Wuzzuf, GulfTalent, and direct company careers portals.
+              Generate tailored CVs, custom cover letters, and screening answers for your review and approval across all qualified matching opportunities.
             </p>
           </div>
           <button
@@ -145,7 +149,7 @@ export default function ApprovalsPage() {
             className="w-full md:w-auto px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center space-x-2 flex-shrink-0 transition-colors shadow-md"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${runningAutopilot ? 'animate-spin' : ''}`} />
-            <span>{runningAutopilot ? 'Applying Everywhere...' : '⚡ Apply Everywhere Autonomously'}</span>
+            <span>{runningAutopilot ? 'Preparing Packages...' : '⚡ Prepare Packages for All Matches'}</span>
           </button>
         </div>
 
@@ -266,21 +270,21 @@ export default function ApprovalsPage() {
           )}
         </div>
 
-        {/* Section 2: Ready to Submit Applications */}
+        {/* Section 2: Ready for Candidate Submission */}
         <div className="space-y-4 pt-4 border-t border-slate-800">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-400" />
               <h3 className="text-base font-bold text-white">
-                Human-Approved & Ready to Apply ({readyToSubmit.length})
+                Human-Approved & Ready for Submission ({readyToSubmit.length})
               </h3>
             </div>
-            <span className="text-xs text-slate-400">Ready for verified dispatch</span>
+            <span className="text-xs text-slate-400">Open portal to submit directly</span>
           </div>
 
           {readyToSubmit.length === 0 ? (
             <div className="p-6 text-center text-slate-400 bg-slate-900 border border-slate-800 rounded-xl text-xs">
-              No applications currently staged in 'Ready to Apply'.
+              No applications currently staged in 'Ready for Submission'.
             </div>
           ) : (
             <div className="space-y-3">
@@ -300,14 +304,14 @@ export default function ApprovalsPage() {
                   </div>
 
                   <div className="flex items-center space-x-3">
-                    {app.job?.source_url && (
+                    {(app.job?.company_portal_url || app.job?.source_url) && (
                       <a
-                        href={app.job.source_url}
+                        href={app.job?.company_portal_url || app.job.source_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs flex items-center space-x-1 border border-slate-700"
+                        className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-lg text-xs flex items-center space-x-1 border border-slate-700 font-semibold"
                       >
-                        <span>Open Careers Portal</span>
+                        <span>Open Employer Portal</span>
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
                     )}
@@ -318,8 +322,8 @@ export default function ApprovalsPage() {
                       disabled={processingId === app.id}
                       className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg text-xs flex items-center space-x-1.5 transition-colors shadow-sm"
                     >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Confirm & Record Submission</span>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Confirm I Have Submitted</span>
                     </button>
                   </div>
                 </div>

@@ -166,7 +166,19 @@ export interface JobListing {
   original_publication_date?: string;
   last_updated_date?: string;
   last_verified_date?: string;
-  verification_status?: 'Verified Open' | 'Open, Date Unconfirmed' | 'Unverified' | 'Expired' | 'Closed' | 'Broken Link' | 'Redirected' | 'Suspicious';
+  verification_status?:
+    | 'Curated Listing'
+    | 'Live Status Confirmed'
+    | 'Open, Date Unconfirmed'
+    | 'Needs Verification'
+    | 'Unverified'
+    | 'Expired'
+    | 'Closed'
+    | 'Broken Link'
+    | 'Redirected'
+    | 'Suspicious'
+    | 'Synthetic Benchmark'
+    | 'Verified Open';
   verification_evidence?: string;
   freshness_classification?: 'Very recent' | 'Recent' | 'Current, requires verification' | 'Older, display with warning' | 'Archived';
   job_fit_score?: number;
@@ -194,7 +206,7 @@ export interface CompanyPortalAccount {
   account_email: string;
   account_username?: string;
   password_hint?: string;
-  status: 'Active' | 'Registered & Applied' | 'Verification Pending' | 'Account Created';
+  status: 'Active' | 'Portal Tracker Initialized' | 'Ready for Candidate Registration' | 'Registered & Applied' | 'Verification Pending' | 'Account Created';
   confirmation_reference?: string;
   applied_at?: string;
   notes?: string;
@@ -235,25 +247,48 @@ export interface MatchBreakdown {
 }
 
 export const PIPELINE_STAGES = [
+  'Draft',
+  'Package Prepared',
+  'Awaiting Approval',
+  'Approved',
+  'Ready for Candidate Submission',
+  'Submitted by Candidate',
+  'Candidate Evidence Provided',
+  'Employer Confirmation Independently Verified',
+  'Employer Confirmation Received',
+  'Evidence Pending Review',
+  'Evidence Rejected',
+  'Legacy Applied – Unverified',
+  'Legacy Applied - Unverified',
+  'Rejected',
+  'Withdrawn',
+  'Failed',
+  // Historical pipeline stages
   'Discovered',
   'Qualified',
   'Shortlisted',
-  'Tailored',
-  'Approval Pending',
-  'Ready to Apply',
-  'Applied',
-  'Confirmation Received',
   'Follow-up',
   'Interview',
   'Assessment',
   'Offer',
   'Negotiation',
   'Hired',
-  'Rejected',
-  'Closed'
+  'Closed',
+  // Legacy aliases for backward compatibility
+  'Tailored',
+  'Approval Pending',
+  'Ready to Apply',
+  'Applied',
+  'Confirmation Received'
 ] as const;
 
 export type PipelineStage = typeof PIPELINE_STAGES[number];
+
+export type ConfirmationEvidenceStatus =
+  | 'Candidate Evidence Provided'
+  | 'Employer Confirmation Independently Verified'
+  | 'Evidence Pending Review'
+  | 'Evidence Rejected';
 
 export interface ApplicationRecord {
   id: string;
@@ -271,6 +306,12 @@ export interface ApplicationRecord {
   submission_type: 'Manual' | 'Automated';
   submission_confirmed: number;
   applied_at?: string;
+  submission_confirmed_at?: string;
+  candidate_submission_notes?: string;
+  employer_confirmation_received_at?: string;
+  employer_confirmation_evidence_type?: string;
+  employer_confirmation_evidence?: string;
+  evidence_status?: ConfirmationEvidenceStatus;
   recruiter_name?: string;
   recruiter_email?: string;
   notes?: string;
@@ -306,6 +347,9 @@ export interface RecruitmentEmail {
   is_draft: number;
   is_sent: number;
   sent_at?: string;
+  provider_message_id?: string;
+  delivery_status?: 'draft' | 'sandbox_recorded' | 'queued' | 'accepted_by_provider' | 'delivered' | 'failed';
+  delivery_provider?: string;
   created_at?: string;
 }
 

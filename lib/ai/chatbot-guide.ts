@@ -54,7 +54,7 @@ export function generateGuideResponse(
     query.includes('human approval')
   ) {
     return {
-      response: `🛡️ **Human Approval Center — Zero Autonomous Submissions**\n\n- **Strict Safety Gate**: Antigravity **NEVER** sends an email, recruiter message, or job application automatically without your authorization.\n- **Preparation**: The AI prepares the complete application package (tailored CV, personalized cover letter, screening answers, and disclosures).\n- **Human Verification**: You inspect every field in the **Approval Center**.\n- Only when you click **Approve** or authorize **⚡ Apply Everywhere** is the application marked ready or the recruiter email dispatched!`,
+      response: `🛡️ **Human Approval Center — Zero Autonomous External Submissions**\n\n- **Strict Safety Gate**: Antigravity **NEVER** sends an email, recruiter message, or job application automatically to external employers.\n- **Package Preparation**: The AI prepares the complete application package (tailored CV, personalized cover letter, screening answers, and disclosures).\n- **Human Verification**: You inspect every document in the **Approval Center**.\n- Only when you click **Approve** is the package moved to **Ready for Candidate Submission**, providing you with direct employer portal links to submit on your own terms.`,
       quickLinks: [
         { label: 'Open Approval Center', path: '/approvals' },
         { label: 'Inspect Application Workspace', path: '/applications' },
@@ -68,7 +68,7 @@ export function generateGuideResponse(
     };
   }
 
-  // 0b. Autonomous Autopilot & Apply Everywhere
+  // 0b. Application Package Generator & Batch Preparation
   if (
     query.includes('apply everywhere') ||
     query.includes('autopilot') ||
@@ -79,9 +79,9 @@ export function generateGuideResponse(
     (query.includes('automatic') && !query.includes('approval'))
   ) {
     return {
-      response: `⚡ **Autonomous Autopilot & Apply Everywhere Engine**\n\nYes! The platform is equipped with full **Autonomous Autopilot** capabilities to apply everywhere on your behalf:\n\n1. **Multi-Platform Coverage**: Scans vacancies across **LinkedIn Jobs**, **RemoteOK**, **Bayt**, **Indeed**, **Wuzzuf**, **GulfTalent**, and **Direct Company Portals** (GitLab, Supabase, Careem, Delivery Hero, Automattic, Stripe, etc.).\n2. **AI Tailoring**: Automatically generates bespoke **Version B CVs**, tailored cover letters, and fills screening questionnaires for every matching role.\n3. **Automated Submission**: Dispatches the applications with status marked \`Applied\` in your CRM and records official confirmation timestamps.\n4. **Automated Recruiter Outreach**: Drafts and queues introductory messages in your Recruitment Inbox.\n\nYou can trigger **⚡ Apply Everywhere Autonomously** with a single click from the **Control Center**, **Approval Center**, or **Applications Workspace**!`,
+      response: `⚡ **Application Package Generator & Batch Tailoring Engine**\n\nThe platform provides automated application package preparation across your matching vacancies:\n\n1. **Multi-Platform Discovery**: Indexes curated opportunities across **LinkedIn**, **RemoteOK**, **Bayt**, **Indeed**, **Wuzzuf**, **GulfTalent**, and **Direct Company Portals**.\n2. **AI Tailoring**: Automatically generates bespoke **Version B CVs**, tailored cover letters, and fills screening questionnaires for matching roles.\n3. **Prepared for Review**: Applications are staged in your CRM with status **Package Prepared**, awaiting your inspection in the Approval Center.\n4. **Assisted Candidate Submission**: For each approved vacancy, you receive the verified official portal link to submit directly, and can confirm submission with one click.\n\nYou can trigger **⚡ Prepare Packages for All Matches** with a single click from the **Control Center**, **Approval Center**, or **Applications Workspace**!`,
       quickLinks: [
-        { label: '⚡ Run Autopilot in Control Center', path: '/control-center' },
+        { label: '⚡ Run Package Generator in Control Center', path: '/control-center' },
         { label: '🛡️ Review Approval Center', path: '/approvals' },
         { label: '📁 Applications Workspace', path: '/applications' }
       ],
@@ -93,7 +93,7 @@ export function generateGuideResponse(
     };
   }
 
-  // 0c. Company Site Redirection & Account Creation (LinkedIn & External ATS)
+  // 0c. Company Site Redirection & Candidate Portal Guides
   if (
     query.includes('company site') ||
     query.includes('create an account') ||
@@ -106,14 +106,14 @@ export function generateGuideResponse(
     (query.includes('lead') && query.includes('account'))
   ) {
     return {
-      response: `🏢 **External Company Site Redirections & Automated Account Creation**\n\nWhen a job application on LinkedIn or an aggregator leads to an external company career website requiring you to create an account (e.g. **Workday**, **Greenhouse**, **Lever**, or proprietary enterprise portals):\n\n1. **Automatic Detection**: The system detects that the listing requires an external company candidate account.\n2. **Automated Account Provisioning**: Antigravity automatically registers a candidate account on the company's portal using your verified email (\`candidate@example.com\`) and secure credentials.\n3. **Application Autofill & Submission**: Your candidate profile (name, contact, work authorization, relocation timeline) and bespoke tailored CV (\`Aya_CV_Company_Position_Date\`) are automatically populated and submitted.\n4. **Official Reference Tracking**: The system captures your official **Application Confirmation Reference Number** (e.g. \`APP-KLA-202611-9214\`).\n5. **Company Portal Vault**: All created company accounts are stored in your **Company Portal Vault** in [Settings](/settings) and [Application CRM](/crm) with direct login links so you can access your account at any time!`,
+      response: `🏢 **External Company Site Redirections & Candidate Portal Guides**\n\nWhen a job listing leads to an external company career portal (e.g. **Workday**, **Greenhouse**, **Lever**, or enterprise ATS):\n\n1. **Portal Detection**: The system identifies the required portal platform and extracts the direct requisition URL.\n2. **Internal Tracking Guide**: Antigravity initializes an internal tracking guide with your candidate email and links the target requisition.\n3. **Tailored Package Readiness**: Your tailored CV and cover letter are ready to download or copy-paste directly into the portal fields.\n4. **Candidate-Controlled Submission**: You open the official employer portal, complete their specific questionnaire, and submit.\n5. **Verified Confirmation Recording**: Once submitted, you record your authentic confirmation reference in your Application Workspace for tracking!`,
       quickLinks: [
-        { label: '🏢 View Company Portal Vault in Settings', path: '/settings' },
+        { label: '🏢 View Portal Tracking in Settings', path: '/settings' },
         { label: '📊 Track in CRM', path: '/crm' },
         { label: '★ Career Control Center', path: '/control-center' }
       ],
       suggestedQuestions: [
-        '⚡ How does auto-apply everywhere work?',
+        '⚡ How does package preparation work?',
         '🔗 How does LinkedIn integration work?',
         '🛡️ What is the Approval Center?'
       ]
@@ -131,14 +131,14 @@ export function generateGuideResponse(
     (query.includes('post') && (query.includes('email') || query.includes('roles') || query.includes('linkedin')))
   ) {
     return {
-      response: `📢 **How Antigravity Deals with Multi-Role LinkedIn Hiring Posts (e.g. Ourshopee Dubai)**\n\nWhen a recruiter or company shares an announcement listing multiple open positions with an email address to send CVs to (like Ourshopee: Finance Manager, Category Manager, Buyer, Procurement Coordinator; direct email: \`mansi.deo@ourshopee.com\`):\n\n1. **AI Multi-Role Disaggregation**: The post is parsed and split into separate, distinct vacancies. Each position (title, years of experience, mandatory qualifications like CA or UAE experience, location: Dubai, work mode: On-site) is extracted and individually indexed.\n2. **Direct Recruiter Contact Extraction**: The parser captures the recruiter's name (\`Mansi Deo\`) and destination email (\`mansi.deo@ourshopee.com\`).\n3. **Candidate Matching**: The platform scores each extracted position against your career profile to identify which roles fit your experience and location preferences.\n4. **Bespoke Version B CV**: A job-specific tailored CV is created (e.g. \`Aya_CV_Ourshopee_FinanceManager_Date\`).\n5. **Direct Recruiter Application Email**: An introduction cover email is automatically drafted referencing the LinkedIn post, highlighting your relevant qualifications, confirming on-site availability, and attaching your tailored CV.\n6. **Autonomous Auto-Apply or Human Approval**: With one click, the application is dispatched directly to the recruiter's inbox and logged in your Application CRM and Mailbox!`,
+      response: `📢 **How Antigravity Deals with Multi-Role LinkedIn Hiring Posts (e.g. Ourshopee Dubai)**\n\nWhen a recruiter shares an announcement listing multiple open positions with an email address to send CVs to (like Ourshopee: Finance Manager, Category Manager, Buyer; direct email: \`mansi.deo@ourshopee.com\`):\n\n1. **AI Multi-Role Disaggregation**: The post is parsed and split into separate, distinct vacancies. Each position (title, qualifications, location, work mode) is individually indexed.\n2. **Direct Recruiter Contact Extraction**: The parser captures the recruiter's name and contact email.\n3. **Candidate Matching**: The platform scores each extracted position against your career profile.\n4. **Bespoke Version B CV**: A job-specific tailored CV is created.\n5. **Draft Outreach Email**: An introduction cover email is drafted and saved in your Recruitment Mailbox for your review.\n6. **Candidate Review & Sending**: You inspect and send the email from your connected email account at your own discretion.`,
       quickLinks: [
         { label: '📥 Paste & Parse LinkedIn Post in Discovery', path: '/discovery' },
         { label: '★ Career Control Center', path: '/control-center' },
         { label: '📬 Recruitment Mailbox', path: '/inbox' }
       ],
       suggestedQuestions: [
-        '⚡ How does auto-apply everywhere work?',
+        '⚡ How does package preparation work?',
         '🏢 What if LinkedIn leads to a company site to create an account?',
         '📊 How does the Application CRM work?'
       ]
@@ -152,7 +152,7 @@ export function generateGuideResponse(
     query.includes('oauth')
   ) {
     return {
-      response: `🔗 **LinkedIn Integration & Recruiter SEO Engine**\n\nThe platform integrates directly with LinkedIn to maximize your recruiter visibility:\n\n- **External Service Integration**: Manage OAuth 2.0 credentials and profile URL under [Settings](/settings).\n- **Recruiter SEO Optimization**: Generates copy-ready headlines (SEO keyword dense, impact-focused, role-centric) and About section under [LinkedIn Optimization](/linkedin).\n- **Profile Synchronization**: Synchronizes 18+ technical skills and target roles directly with the LinkedIn Recruiter search index.\n- **Apply Everywhere**: Discovers and applies to verified LinkedIn listings (e.g. Delivery Hero Berlin, Careem Dubai) on your behalf.`,
+      response: `🔗 **LinkedIn Integration & Recruiter SEO Engine**\n\nThe platform integrates directly with LinkedIn to maximize your recruiter visibility:\n\n- **External Service Integration**: Manage OAuth 2.0 credentials and profile URL under [Settings](/settings).\n- **Recruiter SEO Optimization**: Generates copy-ready headlines (SEO keyword dense, impact-focused, role-centric) and About section under [LinkedIn Optimization](/linkedin).\n- **Profile Synchronization**: Synchronizes 18+ technical skills and target roles directly with the LinkedIn Recruiter search index.\n- **Opportunity Discovery**: Discovers and tailors application packages for curated LinkedIn opportunities.`,
       quickLinks: [
         { label: '⚙️ Configure LinkedIn in Settings', path: '/settings' },
         { label: '📈 Open LinkedIn Optimizer', path: '/linkedin' }
@@ -270,7 +270,7 @@ export function generateGuideResponse(
     query.includes('gate')
   ) {
     return {
-      response: `🛡️ **Human Approval Center — Zero Autonomous Submissions**\n\n- **Strict Safety Gate**: Antigravity **NEVER** sends an email, recruiter message, or job application automatically.\n- **Preparation**: The AI prepares the complete application package (tailored CV, personalized cover letter, screening answers, and disclosures).\n- **Human Verification**: You inspect every field in the **Approval Center**.\n- Only when you click **Approve** or **Confirm** is the application marked ready or the recruiter email dispatched!`,
+      response: `🛡️ **Human Approval Center — Zero Autonomous External Submissions**\n\n- **Strict Safety Gate**: Antigravity **NEVER** sends an email, recruiter message, or job application automatically to external employers.\n- **Preparation**: The AI prepares the complete application package (tailored CV, personalized cover letter, screening answers, and disclosures).\n- **Human Verification**: You inspect every document in the **Approval Center**.\n- Only when you click **Approve** is the package moved to **Ready for Candidate Submission**, allowing you to submit directly on the employer's official portal!`,
       quickLinks: [
         { label: 'Open Approval Center', path: '/approvals' },
         { label: 'Inspect Application Workspace', path: '/applications' },

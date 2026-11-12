@@ -108,7 +108,7 @@ export async function POST(req: Request) {
           verification_status, freshness_classification, is_verified, raw_description
         ) VALUES (
           ?, ?, ?, 'Dubai, UAE / Cairo, Egypt', ?, ?,
-          'Verified Open', 'Fresh (< 48h)', 1, ?
+          'Curated Listing', 'Fresh (< 48h)', 1, ?
         )
       `).run(
         jobId,

@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import { ApplicationRecord, PIPELINE_STAGES, PipelineStage } from '@/lib/types';
+import { calculateApplicationKPIs } from '@/lib/applications/lifecycle';
 import {
   Kanban,
   Table as TableIcon,
@@ -89,17 +90,16 @@ export default function CRMPage() {
     );
   });
 
-  const kanbanColumns: Array<{ title: string; stage: PipelineStage; color: string }> = [
-    { title: 'Pending Approval', stage: 'Approval Pending', color: 'border-amber-500/40 text-amber-400' },
-    { title: 'Ready to Apply', stage: 'Ready to Apply', color: 'border-indigo-500/40 text-indigo-400' },
-    { title: 'Applied / In Review', stage: 'Applied', color: 'border-blue-500/40 text-blue-400' },
+  const kanbanColumns: Array<{ title: string; stage: PipelineStage; color: string; altStages?: string[] }> = [
+    { title: 'Package Prepared', stage: 'Package Prepared', color: 'border-amber-500/40 text-amber-400', altStages: ['Approval Pending', 'Tailored', 'Draft'] },
+    { title: 'Ready to Submit', stage: 'Ready for Candidate Submission', color: 'border-indigo-500/40 text-indigo-400', altStages: ['Ready to Apply', 'Approved'] },
+    { title: 'Submitted by Candidate', stage: 'Submitted by Candidate', color: 'border-blue-500/40 text-blue-400' },
+    { title: 'Evidence Provided', stage: 'Candidate Evidence Provided', color: 'border-emerald-500/40 text-emerald-400', altStages: ['Employer Confirmation Independently Verified', 'Employer Confirmation Received', 'Confirmation Received'] },
+    { title: 'Legacy (Unverified)', stage: 'Legacy Applied – Unverified', color: 'border-slate-500/40 text-slate-400', altStages: ['Legacy Applied - Unverified', 'Applied'] },
     { title: 'Interviewing', stage: 'Interview', color: 'border-purple-500/40 text-purple-400' },
-    { title: 'Offer & Hired', stage: 'Offer', color: 'border-emerald-500/40 text-emerald-400' },
   ];
 
-  const totalApplied = applications.filter(a => a.status === 'Applied').length;
-  const totalInterview = applications.filter(a => a.status === 'Interview').length;
-  const totalPending = applications.filter(a => a.status === 'Approval Pending').length;
+  const kpis = calculateApplicationKPIs(applications);
 
   return (
     <div className="flex-1 flex flex-col font-sans">
@@ -110,30 +110,37 @@ export default function CRMPage() {
 
       <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full space-y-6">
         {/* Metric Cards Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard
-            title="Total Applications"
-            value={applications.length}
-            subtitle="In active pipeline"
+            title="Total In Pipeline"
+            value={kpis.total_active_in_pipeline}
+            subtitle="All active application records"
             icon={<Layers className="w-5 h-5 text-indigo-400" />}
           />
           <StatCard
             title="Awaiting Approval"
-            value={totalPending}
-            subtitle="Human approval gate"
+            value={kpis.prepared_applications}
+            subtitle="Prepared & awaiting review"
             icon={<Clock className="w-5 h-5 text-amber-400" />}
             trend={{ label: 'Gate Active', positive: false }}
           />
           <StatCard
-            title="Applied & Dispatched"
-            value={totalApplied}
-            subtitle="Across portals & email"
+            title="Submitted by Candidate"
+            value={kpis.candidate_reported_submissions}
+            subtitle="Candidate portal confirmed"
             icon={<CheckCircle2 className="w-5 h-5 text-blue-400" />}
-            trend={{ label: 'Verified', positive: true }}
+            trend={{ label: 'Self-Reported', positive: true }}
+          />
+          <StatCard
+            title="Legacy Unverified"
+            value={kpis.legacy_unverified_applications}
+            subtitle="Historical simulated records"
+            icon={<AlertCircle className="w-5 h-5 text-slate-400" />}
+            trend={{ label: 'Unverified', positive: false }}
           />
           <StatCard
             title="Interviews Active"
-            value={totalInterview}
+            value={kpis.interviews_and_offers}
             subtitle="Screening & technical"
             icon={<Sparkles className="w-5 h-5 text-emerald-400" />}
             trend={{ label: 'Active', positive: true }}
@@ -206,7 +213,9 @@ export default function CRMPage() {
         {viewMode === 'kanban' && (
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
             {kanbanColumns.map(col => {
-              const colApps = filteredApps.filter(a => a.status === col.stage);
+              const colApps = filteredApps.filter(
+                a => a.status === col.stage || (col.altStages && col.altStages.includes(a.status))
+              );
 
               return (
                 <div

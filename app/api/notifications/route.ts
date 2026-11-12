@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import db, { getOrCreateDefaultUser } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { classifyApplicationLifecycle } from '@/lib/applications/lifecycle';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -36,15 +37,52 @@ export async function GET(req: Request) {
     `).all() as any[];
 
     const notifications = [
-      ...apps.map(a => ({
-        id: `notif_app_${a.id}`,
-        type: 'application',
-        title: `Application ${a.status}: ${a.title}`,
-        description: `${a.employer} • ${a.submission_type} dispatch (${a.match_score}% match).`,
-        timestamp: a.updated_at || a.created_at,
-        severity: a.status === 'Applied' || a.status === 'Interview' ? 'success' : 'info',
-        ref: a.confirmation_reference || null
-      })),
+      ...apps.map(a => {
+        const lifecycle = classifyApplicationLifecycle(a);
+        const getTitle = () => {
+          switch (lifecycle) {
+            case 'Employer Confirmation Independently Verified':
+              return `Application Verified by Employer: ${a.title}`;
+            case 'Submitted by Candidate':
+              return `Application Submitted by Candidate: ${a.title}`;
+            case 'Candidate Evidence Provided':
+              return `Confirmation Evidence Uploaded: ${a.title}`;
+            case 'Legacy Applied – Unverified':
+              return `Application Legacy Unverified: ${a.title}`;
+            default:
+              return `Application ${lifecycle}: ${a.title}`;
+          }
+        };
+        const getDescription = () => {
+          switch (lifecycle) {
+            case 'Employer Confirmation Independently Verified':
+              return `${a.employer} • Independently verified employer receipt (${a.match_score}% match).`;
+            case 'Submitted by Candidate':
+              return `${a.employer} • Candidate confirmed direct submission (${a.match_score}% match).`;
+            case 'Candidate Evidence Provided':
+              return `${a.employer} • Supporting evidence uploaded (${a.match_score}% match).`;
+            case 'Legacy Applied – Unverified':
+              return `${a.employer} • Legacy unverified historical record (${a.match_score}% match).`;
+            default:
+              return `${a.employer} • Tailored package prepared (${a.match_score}% match).`;
+          }
+        };
+        const getSeverity = () => {
+          if (lifecycle === 'Employer Confirmation Independently Verified' || lifecycle === 'Submitted by Candidate' || lifecycle === 'Interview') return 'success';
+          if (lifecycle === 'Legacy Applied – Unverified') return 'warning';
+          return 'info';
+        };
+
+        return {
+          id: `notif_app_${a.id}`,
+          type: 'application',
+          title: getTitle(),
+          description: getDescription(),
+          timestamp: a.updated_at || a.created_at,
+          severity: getSeverity(),
+          ref: a.confirmation_reference || null
+        };
+      }),
       ...emails.map(e => ({
         id: `notif_email_${e.id}`,
         type: 'email',

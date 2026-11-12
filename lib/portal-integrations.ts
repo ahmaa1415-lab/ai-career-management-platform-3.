@@ -196,9 +196,9 @@ export function getAllConnectedPortals(userId?: string): PortalIntegration[] {
       client_id: existingMap.get('gulftalent')?.client_id || 'gt_exec_aya_99',
       client_secret_masked: '••••••••••••••••',
       stats: {
-        matched_vacancies: 6,
-        applications_dispatched: 3,
-        recruiter_score: '91% Leadership Fit'
+        matched_vacancies: 0,
+        applications_dispatched: 0,
+        recruiter_score: 'Standard'
       }
     },
     {
@@ -212,24 +212,24 @@ export function getAllConnectedPortals(userId?: string): PortalIntegration[] {
       brand_color: '#2164f3',
       border_color: 'border-indigo-500/40',
       account_email: email,
-      profile_url: 'https://my.indeed.com/p/aya-hamouda',
-      status: (existingMap.get('indeed')?.status as any) || 'connected',
+      profile_url: profile?.profile?.linkedin_url || '',
+      status: (existingMap.get('indeed')?.status as any) || 'sandbox',
       sync_frequency: 'Continuous Feed Scan',
       last_synced_at: existingMap.get('indeed')?.last_synced_at || now,
       target_regions: ['Multi-Country (Egypt, UAE, Germany, UK)'],
       capabilities: [
         'Real-Time Job Crawling',
-        'Automated Screening Question Answers',
-        'Instant Application Tracker',
+        'Screening Question Preparation',
+        'Application Package Tracker',
         'Company Review & Rating Intelligence'
       ],
       credentials_label: 'Indeed Apply API Token',
-      client_id: existingMap.get('indeed')?.client_id || 'ind_apply_aya_mena',
-      client_secret_masked: '••••••••••••••••',
+      client_id: existingMap.get('indeed')?.client_id || '',
+      client_secret_masked: existingMap.get('indeed')?.client_id ? '••••••••••••••••' : '',
       stats: {
-        matched_vacancies: 12,
-        applications_dispatched: 4,
-        recruiter_score: '92% Alignment'
+        matched_vacancies: 0,
+        applications_dispatched: 0,
+        recruiter_score: 'Standard'
       }
     },
     {
@@ -243,30 +243,29 @@ export function getAllConnectedPortals(userId?: string): PortalIntegration[] {
       brand_color: '#FF4742',
       border_color: 'border-rose-500/40',
       account_email: email,
-      profile_url: 'https://remoteok.com/@ayadev',
-      status: (existingMap.get('remoteok')?.status as any) || 'connected',
+      profile_url: '',
+      status: (existingMap.get('remoteok')?.status as any) || 'sandbox',
       sync_frequency: 'Continuous Webhook Sync',
       last_synced_at: existingMap.get('remoteok')?.last_synced_at || now,
       target_regions: ['Worldwide Remote (EMEA Timezone Friendly)'],
       capabilities: [
-        'Instant Remote Job Webhook',
-        'Fast-Track Direct API Application',
-        'Automatic Timezone Matcher (UTC+2 Cairo Friendly)',
+        'Curated Remote Vacancy Feed',
+        'Direct Candidate Application Guide',
         'USD & EUR Salary Benchmarking'
       ],
       credentials_label: 'Webhook API Secret',
-      client_id: existingMap.get('remoteok')?.client_id || 'rok_aya_hook_token',
-      client_secret_masked: '••••••••••••••••',
+      client_id: existingMap.get('remoteok')?.client_id || '',
+      client_secret_masked: existingMap.get('remoteok')?.client_id ? '••••••••••••••••' : '',
       stats: {
-        matched_vacancies: 7,
-        applications_dispatched: 3,
-        recruiter_score: '98% Remote Ready'
+        matched_vacancies: 0,
+        applications_dispatched: 0,
+        recruiter_score: 'Standard'
       }
     },
     {
       id: `portal_company_portals_${user.id}`,
       service: 'company_portals',
-      name: 'Enterprise Company Portals Vault',
+      name: 'Enterprise Company Portals Tracker',
       tagline: 'Workday, Lever, Greenhouse, SAP SuccessFactors & Custom Career Sites',
       category: 'Enterprise ATS',
       url: 'https://workday.com',
@@ -274,24 +273,24 @@ export function getAllConnectedPortals(userId?: string): PortalIntegration[] {
       brand_color: '#6366F1',
       border_color: 'border-purple-500/40',
       account_email: email,
-      profile_url: 'Multi-Tenant Auto-Created Accounts',
+      profile_url: 'Internal Candidate Portal Tracking',
       status: 'active',
-      sync_frequency: 'On-Demand Auto-Provisioning',
+      sync_frequency: 'On-Demand Tracking Guide',
       last_synced_at: now,
       target_regions: ['Enterprise Employers (Delivery Hero, Klarna, Amazon, L’Oréal, Careem)'],
       capabilities: [
-        'Autonomous Candidate Account Creation',
-        'Workday Candidate Profile Provisioning',
-        'Lever & Greenhouse Automated Form Filing',
-        'Application Reference Number Vault'
+        'Candidate Portal Tracking Guide',
+        'Workday Candidate Package Preparation',
+        'Lever & Greenhouse Application Package Preparation',
+        'Internal Tracking Reference Vault'
       ],
       credentials_label: 'Enterprise Vault Key',
-      client_id: 'vault_autoprovision_engine',
+      client_id: 'vault_tracker_engine',
       client_secret_masked: '••••••••••••••••',
       stats: {
-        matched_vacancies: 10,
-        applications_dispatched: 5,
-        recruiter_score: '100% Verified Delivery'
+        matched_vacancies: 0,
+        applications_dispatched: 0,
+        recruiter_score: 'Package Prepared'
       }
     }
   ];

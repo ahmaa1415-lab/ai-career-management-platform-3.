@@ -313,7 +313,7 @@ export function applyToLinkedInPostRole(
     95
   );
 
-  // 2. Insert Application Record
+  // 2. Register Application in 'Package Prepared' state (truthful lifecycle)
   const appId = `app_post_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
   db.prepare(`
     INSERT INTO applications (
@@ -321,7 +321,7 @@ export function applyToLinkedInPostRole(
       tailored_cv_id, cover_letter, screening_responses, disclosures_accepted,
       human_approved, approved_at, submission_type, submission_confirmed,
       applied_at, recruiter_name, recruiter_email, notes
-    ) VALUES (?, ?, ?, 'Applied', 95, '{}', ?, ?, ?, 1, 1, CURRENT_TIMESTAMP, 'Automated', 1, CURRENT_TIMESTAMP, ?, ?, ?)
+    ) VALUES (?, ?, ?, 'Package Prepared', 95, '{}', ?, ?, ?, 1, 0, NULL, 'Manual', 0, NULL, ?, ?, ?)
   `).run(
     appId,
     user.id,
@@ -331,7 +331,7 @@ export function applyToLinkedInPostRole(
     JSON.stringify(tailoredPkg.screening_responses),
     recruiterName || 'Talent Acquisition Team',
     recruiterEmail,
-    `Direct email application dispatched to ${recruiterEmail} for ${job.title} at ${job.employer}. Tailored CV attached: ${cvTitle}.`
+    `Tailored application package prepared from LinkedIn post for ${job.title} at ${job.employer}. Review and approve in Approval Center.`
   );
 
   // 3. Draft & Dispatch Outbound Email to Recruiter
@@ -358,7 +358,7 @@ ${candEmail}${candidateProfile.profile.linkedin_url ? `\nLinkedIn: ${candidatePr
 
   db.prepare(`
     INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-    VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
+    VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, NULL)
   `).run(
     emailId,
     appId,
@@ -368,7 +368,7 @@ ${candEmail}${candidateProfile.profile.linkedin_url ? `\nLinkedIn: ${candidatePr
     emailBody
   );
 
-  logAudit('LINKEDIN_POST_DIRECT_EMAIL_APPLIED', {
+  logAudit('LINKEDIN_POST_PACKAGE_PREPARED', {
     application_id: appId,
     employer: job.employer,
     role: job.title,
@@ -385,7 +385,7 @@ ${candEmail}${candidateProfile.profile.linkedin_url ? `\nLinkedIn: ${candidatePr
     recruiter_email: recruiterEmail,
     subject: emailSubject,
     email_body: emailBody,
-    status: 'Applied',
-    message: `Direct application email successfully sent to ${recruiterEmail} for ${job.title}!`
+    status: 'Package Prepared',
+    message: `Tailored application package prepared for ${job.title} at ${job.employer}! Ready for review in Approval Center.`
   };
 }

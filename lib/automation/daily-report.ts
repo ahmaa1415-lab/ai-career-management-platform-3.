@@ -5,6 +5,7 @@ import { rankTopOpportunities } from '../jobs/matcher';
 import { getAllApplications } from '../crm/pipeline';
 import { getAllEmails } from '../email/inbox';
 import { DailyReportRecord } from '../types';
+import { calculateApplicationKPIs } from '../applications/lifecycle';
 
 export function getCairoCurrentTime(): { iso: string; cairoTimeString: string; hour: number; minute: number } {
   // Africa/Cairo is UTC+2 (or UTC+3 during DST if active)
@@ -47,17 +48,15 @@ export function generateDailyExecutiveReport(userId?: string): DailyReportRecord
   const allApps = getAllApplications(user.id);
   const allEmails = getAllEmails();
 
-  // Metrics computation
-  const appsPrepared = allApps.length;
-  const appsPendingApproval = allApps.filter(a => a.status === 'Approval Pending').length;
-  const appsReadyToApply = allApps.filter(a => a.status === 'Ready to Apply').length;
-  const appsSubmitted = allApps.filter(a => a.status === 'Applied' || a.submission_confirmed === 1).length;
+  // Canonical unified metrics computation
+  const kpis = calculateApplicationKPIs(allApps);
   const interviewsCount = allApps.filter(a => a.status === 'Interview').length;
   const assessmentsCount = allApps.filter(a => a.status === 'Assessment').length;
   const offersCount = allApps.filter(a => a.status === 'Offer' || a.status === 'Negotiation').length;
 
   const emailsDrafted = allEmails.filter(e => e.is_draft === 1).length;
-  const emailsSent = allEmails.filter(e => e.is_sent === 1).length;
+  const emailsSandboxRecorded = allEmails.filter(e => (e as any).delivery_status === 'sandbox_recorded' || (e.is_draft === 0 && e.is_sent === 0)).length;
+  const emailsDispatched = allEmails.filter(e => e.is_sent === 1 && (e as any).provider_message_id).length;
   const recruiterReplies = allEmails.filter(e => e.category === 'Recruiter Message' || e.category === 'Interview').length;
 
   const reportDate = cairoTime.cairoTimeString.split(' ')[0];
@@ -77,12 +76,16 @@ export function generateDailyExecutiveReport(userId?: string): DailyReportRecord
 |---|---:|---|
 | **Verified Vacancies Monitored** | ${allJobs.length} | Sourced from RemoteOK, Bayt, Indeed, Wuzzuf, LinkedIn |
 | **Top 10 Opportunity Matches** | ${top10.length} | Scored via 8-criterion weighted algorithm |
-| **Applications Prepared** | ${appsPrepared} | Complete with tailored CVs & cover letters |
-| **Pending Human Approvals** | ${appsPendingApproval} | Awaiting explicit review in Approval Center |
-| **Applications Ready to Apply** | ${appsReadyToApply} | Human approved; ready for dispatch |
-| **Applications Submitted** | ${appsSubmitted} | Verified submissions recorded |
+| **Active Pipeline Total** | ${kpis.total_active_in_pipeline} | Total tracked application packages |
+| **Packages Prepared (Awaiting Approval)** | ${kpis.prepared_applications} | Complete with tailored CVs & cover letters |
+| **Ready for Candidate Submission** | ${kpis.ready_for_candidate_submission} | Human approved; ready for candidate portal submission |
+| **Candidate Submissions Confirmed** | ${kpis.candidate_reported_submissions} | Explicit candidate portal confirmations |
+| **Employer Receipts Independently Verified** | ${kpis.independently_verified_employer_receipts} | Verified via authenticated employer ATS callbacks |
+| **Candidate Evidence Uploaded** | ${kpis.candidate_evidence_provided} | Supporting receipts / screenshots uploaded |
+| **Legacy Unverified Records** | ${kpis.legacy_unverified_applications} | Historical unverified records (not genuine submissions) |
 | **Recruitment Emails Drafted** | ${emailsDrafted} | Stored securely in Draft status |
-| **Emails Dispatched** | ${emailsSent} | Verified sent records |
+| **Emails Recorded in Sandbox** | ${emailsSandboxRecorded} | Safe simulation; no external transmission |
+| **Emails Dispatched via Provider** | ${emailsDispatched} | Verified sent records with provider receipts |
 | **Recruiter Inbound Replies** | ${recruiterReplies} | Received in Recruitment Mailbox |
 | **Active Technical Interviews** | ${interviewsCount} | In pipeline |
 | **Technical Assessments** | ${assessmentsCount} | In pipeline |
@@ -106,8 +109,8 @@ ${top10.slice(0, 5).map((item, idx) => `
 
 ## 3. High-Priority Actions & Blockers
 
-${appsPendingApproval > 0
-  ? `> [!IMPORTANT] You have **${appsPendingApproval} application packages** waiting in the **Approval Center**. Please review the tailored CVs, cover letters, and data disclosures to authorize submissions.`
+${kpis.prepared_applications > 0
+  ? `> [!IMPORTANT] You have **${kpis.prepared_applications} application packages** waiting in the **Approval Center**. Please review the tailored CVs, cover letters, and data disclosures to authorize submissions.`
   : '> [!NOTE] All prepared application packages have been reviewed.'}
 
 ${emailsDrafted > 0
@@ -131,11 +134,15 @@ ${emailsDrafted > 0
     report_date: reportDate,
     total_jobs_monitored: allJobs.length,
     top_matches_count: top10.length,
-    applications_prepared: appsPrepared,
-    pending_approvals: appsPendingApproval,
-    applications_submitted: appsSubmitted,
+    applications_in_pipeline: kpis.total_active_in_pipeline,
+    packages_prepared: kpis.prepared_applications,
+    ready_for_submission: kpis.ready_for_candidate_submission,
+    candidate_confirmed_submissions: kpis.candidate_reported_submissions,
+    employer_verified_receipts: kpis.independently_verified_employer_receipts,
+    legacy_unverified_applications: kpis.legacy_unverified_applications,
     emails_drafted: emailsDrafted,
-    emails_sent: emailsSent,
+    emails_sandbox_recorded: emailsSandboxRecorded,
+    emails_dispatched: emailsDispatched,
     interviews: interviewsCount,
     assessments: assessmentsCount,
     offers: offersCount

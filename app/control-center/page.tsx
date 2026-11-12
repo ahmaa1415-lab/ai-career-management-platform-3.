@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { JobListing, MatchBreakdown, ApplicationRecord, ResumeRecord } from '@/lib/types';
 import { PIPELINE_STAGES, PipelineStage } from '@/lib/types';
+import { calculateApplicationKPIs } from '@/lib/applications/lifecycle';
 
 // Helper function to calculate job recency and freshness badge
 function getJobFreshness(dateStr?: string) {
@@ -203,6 +204,7 @@ export default function CareerControlCenterPage() {
   } | null>(null);
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const kpis = calculateApplicationKPIs(applications);
 
   const handleUploadCV = async (file: File) => {
     if (!file) return;
@@ -678,14 +680,14 @@ export default function CareerControlCenterPage() {
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                 </span>
                 <h2 className="text-base font-bold text-white flex items-center space-x-2">
-                  <span>Autonomous Autopilot Engine</span>
+                  <span>Application Package Preparation Engine</span>
                   <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                    Auto-Apply Everywhere Active
+                    Package Preparation Engine Active
                   </span>
                 </h2>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
-                The AI autonomously scans verified recruitment sources, matches with your profile, generates tailored Version B CVs, customizes cover letters, and submits verified applications on your behalf with zero manual friction.
+                The AI scans verified recruitment sources, matches with your profile, generates tailored Version B CVs, customizes cover letters, and organizes verified application packages ready for candidate review and submission.
               </p>
             </div>
 
@@ -716,7 +718,7 @@ export default function CareerControlCenterPage() {
                 className="px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-sm border border-blue-400/30"
               >
                 <Bot className="w-4 h-4 text-blue-200" />
-                <span>{isLinkedInBoxOpen ? 'Hide LinkedIn Agent Hub' : '🤖 LinkedIn Scout & Multi-Channel Apply'}</span>
+                <span>{isLinkedInBoxOpen ? 'Hide LinkedIn Agent Hub' : '🤖 LinkedIn Scout & Package Preparation'}</span>
               </button>
 
               <button
@@ -726,12 +728,12 @@ export default function CareerControlCenterPage() {
                 className="px-5 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-extrabold rounded-lg text-xs flex items-center justify-center space-x-2 transition-all shadow-md cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${runningAutopilot ? 'animate-spin' : ''}`} />
-                <span>{runningAutopilot ? 'Applying Everywhere On Your Behalf...' : '⚡ Run Autonomous Auto-Apply'}</span>
+                <span>{runningAutopilot ? 'Preparing Tailored Packages...' : '⚡ Prepare Packages for All Matches'}</span>
               </button>
             </div>
           </div>
 
-          {/* Autonomous LinkedIn Scout & Multi-Channel Apply Hub */}
+          {/* Autonomous LinkedIn Scout & Package Preparation Hub */}
           {isLinkedInBoxOpen && (
             <div className="mt-4 pt-4 border-t border-slate-800/80 bg-slate-950/80 p-5 rounded-2xl border border-blue-500/40 space-y-4 shadow-xl">
               {/* LinkedIn Account Connection Banner */}
@@ -861,12 +863,12 @@ export default function CareerControlCenterPage() {
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-bold text-white flex items-center space-x-2">
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          <span>Discovered LinkedIn Hiring Posts & Dispatched Applications ({scoutResult.dispatched_applications.length})</span>
+                          <span>Discovered LinkedIn Hiring Posts & Prepared Packages ({scoutResult.dispatched_applications.length})</span>
                         </h4>
                         <div className="flex items-center space-x-3 text-xs">
-                          <span className="text-blue-400 font-semibold">✉️ {scoutResult.channel_summary?.gmail_direct_emails} Gmail</span>
-                          <span className="text-emerald-400 font-semibold">🌐 {scoutResult.channel_summary?.company_portals_submitted} Portals</span>
-                          <span className="text-indigo-400 font-semibold">💬 {scoutResult.channel_summary?.linkedin_dms_sent} LinkedIn DMs</span>
+                          <span className="text-blue-400 font-semibold">✉️ {scoutResult.channel_summary?.gmail_direct_emails} Drafts</span>
+                          <span className="text-emerald-400 font-semibold">🌐 {scoutResult.channel_summary?.company_portals_submitted} Portal Guides</span>
+                          <span className="text-indigo-400 font-semibold">💬 {scoutResult.channel_summary?.linkedin_dms_sent} InMail Drafts</span>
                         </div>
                       </div>
 
@@ -999,8 +1001,16 @@ export default function CareerControlCenterPage() {
                 </span>
               ))}
             </div>
-            <div className="text-[11px] text-emerald-400 font-semibold">
-              Applications In CRM: {applications.length} submitted / tracked
+            <div className="text-[11px] text-slate-300 font-medium flex items-center gap-2">
+              <span className="text-emerald-400 font-semibold">{kpis.candidate_reported_submissions} Confirmed</span>
+              <span>•</span>
+              <span className="text-blue-400">{kpis.prepared_applications} In Pipeline</span>
+              {kpis.legacy_unverified_applications > 0 && (
+                <>
+                  <span>•</span>
+                  <span className="text-slate-400">{kpis.legacy_unverified_applications} Legacy Unverified</span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2004,7 +2014,7 @@ export default function CareerControlCenterPage() {
                 <div>
                   <h4 className="text-sm font-bold text-white">All Applications Approved & Tracked in CRM</h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-                    You have <strong>{applications.length} verified applications</strong> submitted and active in your pipeline. There are no unapproved packages pending.
+                    You have <strong>{kpis.candidate_reported_submissions} candidate-confirmed submissions</strong> and <strong>{kpis.total_active_in_pipeline} total applications</strong> in your pipeline. There are no unapproved packages pending.
                   </p>
                 </div>
 
@@ -2105,7 +2115,7 @@ export default function CareerControlCenterPage() {
                   <span>Comprehensive Application Tracker & Pipeline CRM</span>
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Real-time synchronization across {applications.length} submitted & active job applications.
+                  Real-time synchronization across {applications.length} pipeline records ({kpis.candidate_reported_submissions} candidate-confirmed, {kpis.legacy_unverified_applications} legacy unverified).
                 </p>
               </div>
 

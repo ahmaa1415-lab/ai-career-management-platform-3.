@@ -32,9 +32,9 @@ export interface AutonomousApplyResult {
     source: string;
     source_url: string;
     match_score: number;
-    submission_type: 'Automated';
-    status: 'Applied';
-    applied_at: string;
+    submission_type: 'Manual';
+    status: 'Package Prepared';
+    applied_at?: string;
     company_account_created: boolean;
     portal_platform?: string;
     confirmation_reference?: string;
@@ -46,13 +46,14 @@ export function getAutopilotStatus(userId?: string) {
   const user = userId ? { id: userId } : getOrCreateDefaultUser();
 
   const countRow = db.prepare(`
-    SELECT COUNT(*) as count FROM applications WHERE user_id = ? AND status = 'Applied'
+    SELECT COUNT(*) as count FROM applications
+    WHERE user_id = ? AND status IN ('Package Prepared', 'Awaiting Approval', 'Approval Pending', 'Ready for Candidate Submission', 'Submitted by Candidate')
   `).get(user.id) as any;
 
-  const totalApplied = countRow?.count || 0;
+  const totalPrepared = countRow?.count || 0;
 
-  const lastAppliedRow = db.prepare(`
-    SELECT applied_at FROM applications WHERE user_id = ? AND status = 'Applied' ORDER BY applied_at DESC LIMIT 1
+  const lastPreparedRow = db.prepare(`
+    SELECT updated_at FROM applications WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1
   `).get(user.id) as any;
 
   const permissionsRow = db.prepare(`
@@ -63,9 +64,9 @@ export function getAutopilotStatus(userId?: string) {
 
   return {
     is_enabled: isEnabled,
-    mode: 'Full Autonomous Autopilot',
-    total_applied: totalApplied,
-    last_run_at: lastAppliedRow?.applied_at || null,
+    mode: 'Assisted Package Preparation & Tailoring Engine',
+    total_applied: totalPrepared,
+    last_run_at: lastPreparedRow?.updated_at || null,
     target_platforms: [
       'LinkedIn Posts (Recruiter & Founder Feeds)',
       'LinkedIn Jobs',
@@ -76,8 +77,8 @@ export function getAutopilotStatus(userId?: string) {
       'GulfTalent',
       'Company Direct Careers'
     ],
-    submission_frequency: 'Continuous background discovery & immediate automated dispatch',
-    human_delegation: 'Full delegation authorized by candidate'
+    submission_frequency: 'Continuous background discovery & tailored package preparation',
+    human_delegation: 'Packages prepared for candidate review and approval'
   };
 }
 
@@ -122,11 +123,11 @@ export function runAutonomousApplyEverywhere(
   const appliedList: any[] = [];
   let newlyApplied = 0;
 
-  // 2. Iterate through each vacancy and autonomously tailor, approve, and submit
+  // 2. Iterate through each vacancy and prepare tailored packages
   for (const job of jobs) {
     const match = calculateMatchScore(candidate, job);
 
-    // Apply if score meets the threshold or forceAll is true
+    // Prepare package if score meets threshold or forceAll is true
     if (options?.forceAll || match.overall_score >= minScore) {
       const portalReq = detectPortalRequirement(job);
       let portalAcc: any = null;
@@ -139,34 +140,26 @@ export function runAutonomousApplyEverywhere(
           portalAcc = autoProvisionCompanyPortalAccount(user.id, job, candidate, existing.id);
         }
 
-        const noteText = portalAcc
-          ? `Autonomously applied via ${job.employer} (${portalAcc.portal_platform}) portal. Candidate account created (${portalAcc.account_email}). Ref: ${portalAcc.confirmation_reference}`
-          : `Autonomously submitted on behalf of ${candidate.profile.headline || 'Candidate'} across ${job.source}.`;
+        const noteText = `Tailored application package prepared for ${job.title} at ${job.employer}. Review and approve in Approval Center before submitting.`;
 
-        db.prepare(`
-          UPDATE applications
-          SET status = 'Applied',
-              submission_type = 'Automated',
-              submission_confirmed = 1,
-              human_approved = 1,
-              external_portal_account_created = ?,
-              portal_account_id = ?,
-              confirmation_reference = ?,
-              approved_at = CURRENT_TIMESTAMP,
-              applied_at = CURRENT_TIMESTAMP,
-              notes = ?,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(
-          portalAcc ? 1 : 0,
-          portalAcc ? portalAcc.id : null,
-          portalAcc ? portalAcc.confirmation_reference : null,
-          noteText,
-          existing.id
-        );
-
-        if (existing.status !== 'Applied') {
-          newlyApplied++;
+        // If not already approved/submitted, keep in Package Prepared
+        if (existing.status !== 'Submitted by Candidate' && existing.status !== 'Applied') {
+          db.prepare(`
+            UPDATE applications
+            SET status = CASE WHEN human_approved = 1 THEN 'Ready for Candidate Submission' ELSE 'Package Prepared' END,
+                external_portal_account_created = ?,
+                portal_account_id = ?,
+                confirmation_reference = ?,
+                notes = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(
+            portalAcc ? 1 : 0,
+            portalAcc ? portalAcc.id : null,
+            portalAcc ? portalAcc.confirmation_reference : null,
+            noteText,
+            existing.id
+          );
         }
 
         appliedList.push({
@@ -178,9 +171,9 @@ export function runAutonomousApplyEverywhere(
           source: job.source,
           source_url: job.source_url,
           match_score: match.overall_score,
-          submission_type: 'Automated',
-          status: 'Applied',
-          applied_at: new Date().toISOString(),
+          submission_type: 'Manual',
+          status: 'Package Prepared',
+          applied_at: undefined,
           company_account_created: Boolean(portalAcc),
           portal_platform: portalAcc?.portal_platform || portalReq.portalPlatform,
           confirmation_reference: portalAcc?.confirmation_reference,
@@ -209,8 +202,9 @@ export function runAutonomousApplyEverywhere(
         );
 
         const appId = `app_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        const noteText = `Tailored package prepared for ${job.title} at ${job.employer}. Awaiting human review in Approval Center.`;
 
-        // Insert application record first so foreign keys succeed
+        // Insert application record in 'Package Prepared' state
         db.prepare(`
           INSERT INTO applications (
             id, user_id, job_id, status, match_score, match_details_json,
@@ -218,7 +212,7 @@ export function runAutonomousApplyEverywhere(
             human_approved, approved_at, submission_type, submission_confirmed,
             applied_at, external_portal_account_created, portal_account_id,
             confirmation_reference, notes, source_resume_id, resume_version
-          ) VALUES (?, ?, ?, 'Applied', ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP, 'Automated', 1, CURRENT_TIMESTAMP, 0, null, null, ?, ?, ?)
+          ) VALUES (?, ?, ?, 'Package Prepared', ?, ?, ?, ?, ?, 1, 0, null, 'Manual', 0, null, 0, null, null, ?, ?, ?)
         `).run(
           appId,
           user.id,
@@ -228,7 +222,7 @@ export function runAutonomousApplyEverywhere(
           cvId,
           tailoredPkg.cover_letter,
           JSON.stringify(tailoredPkg.screening_responses),
-          `Autonomously submitted on behalf of ${candidate.profile.headline || 'Candidate'} across ${job.source}.`,
+          noteText,
           sourceResumeId,
           resumeVersion
         );
@@ -237,38 +231,32 @@ export function runAutonomousApplyEverywhere(
           portalAcc = autoProvisionCompanyPortalAccount(user.id, job, candidate, appId);
         }
 
-        const noteText = portalAcc
-          ? `Autonomously applied via ${job.employer} (${portalAcc.portal_platform}) portal. Candidate account created (${portalAcc.account_email}). Ref: ${portalAcc.confirmation_reference}`
-          : `Autonomously submitted on behalf of ${candidate.profile.headline || 'Candidate'} across ${job.source}.`;
-
         if (portalAcc) {
           db.prepare(`
             UPDATE applications
             SET external_portal_account_created = 1,
                 portal_account_id = ?,
                 confirmation_reference = ?,
-                notes = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).run(
             portalAcc.id,
             portalAcc.confirmation_reference,
-            noteText,
             appId
           );
         }
 
-        // Record outreach email in inbox
+        // Record draft email in candidate mailbox (is_draft = 1, is_sent = 0)
         const emailId = `email_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         db.prepare(`
           INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-          VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
+          VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
         `).run(
           emailId,
           appId,
-          'candidate@example.com',
+          candidate.profile?.email || 'candidate@example.com',
           `${job.employer} Talent Acquisition`,
-          `Application: ${job.title} - Aya Developer`,
+          `[Draft Application] ${job.title} - ${candidate.profile?.full_name || 'Candidate'}`,
           tailoredPkg.cover_letter
         );
 
@@ -283,23 +271,23 @@ export function runAutonomousApplyEverywhere(
           source: job.source,
           source_url: job.source_url,
           match_score: match.overall_score,
-          submission_type: 'Automated',
-          status: 'Applied',
-          applied_at: new Date().toISOString(),
+          submission_type: 'Manual',
+          status: 'Package Prepared',
+          applied_at: undefined,
           company_account_created: Boolean(portalAcc),
           portal_platform: portalAcc?.portal_platform || portalReq.portalPlatform,
           confirmation_reference: portalAcc?.confirmation_reference,
           notes: noteText
         });
 
-        logAudit('AUTONOMOUS_APPLICATION_DISPATCHED', {
+        logAudit('PACKAGE_PREPARED', {
           application_id: appId,
           employer: job.employer,
           title: job.title,
           source: job.source,
           match_score: match.overall_score,
-          submission_type: 'Automated',
-          company_portal_account: portalAcc ? portalAcc.portal_platform : 'None'
+          submission_type: 'Manual',
+          company_portal_tracker: portalAcc ? portalAcc.portal_platform : 'None'
         }, user.id);
       }
     }
@@ -308,22 +296,22 @@ export function runAutonomousApplyEverywhere(
   // 3. Update permissions to confirm automation authorization
   db.prepare(`
     UPDATE profile_permissions
-    SET submit_applications_authorized = 1,
-        send_emails_authorized = 1,
-        scheduled_automation_desired = 1,
+    SET cv_analysis_authorized = 1,
+        job_research_authorized = 1,
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `).run(user.id);
 
   const totalInSystem = (db.prepare(`
-    SELECT COUNT(*) as count FROM applications WHERE user_id = ? AND status = 'Applied'
+    SELECT COUNT(*) as count FROM applications
+    WHERE user_id = ? AND status IN ('Package Prepared', 'Awaiting Approval', 'Approval Pending', 'Ready for Candidate Submission', 'Submitted by Candidate')
   `).get(user.id) as any)?.count || appliedList.length;
 
   const platforms = Array.from(new Set(appliedList.map(a => a.source.split(' / ')[0]))).filter(Boolean);
 
-  logAudit('AUTONOMOUS_AUTOPILOT_COMPLETED', {
-    newly_applied: newlyApplied,
-    total_applied: totalInSystem,
+  logAudit('BATCH_PACKAGES_PREPARED', {
+    newly_prepared: newlyApplied,
+    total_packages: totalInSystem,
     platforms_count: platforms.length
   }, user.id);
 
@@ -331,7 +319,7 @@ export function runAutonomousApplyEverywhere(
 
   return {
     success: true,
-    message: `Autopilot successfully dispatched ${appliedList.length} applications on your behalf across all verified platforms!`,
+    message: `Application Package Generator successfully prepared ${appliedList.length} tailored packages ready for review in Approval Center!`,
     timestamp: new Date().toISOString(),
     total_jobs_scanned: jobs.length,
     newly_applied_count: newlyApplied,
@@ -367,9 +355,11 @@ export function runLinkedInPostsAutoApply(userId?: string) {
 
   return {
     success: true,
-    message: `Autonomously applied to ${postApplications.length} LinkedIn recruiter & founder posts on your behalf!`,
+    message: `Prepared tailored application packages for ${postApplications.length} LinkedIn opportunities ready for review!`,
     total_linkedin_applied: postApplications.length,
     applications: postApplications,
     timestamp: new Date().toISOString()
   };
 }
+
+export const runAutonomousApplications = runAutonomousApplyEverywhere;

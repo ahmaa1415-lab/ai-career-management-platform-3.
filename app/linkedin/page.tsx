@@ -193,7 +193,7 @@ export default function LinkedInPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to auto-apply');
 
-      setStatusMessage(`🎉 ${data.message || `Successfully dispatched tailored application for ${roleTitle}!`}`);
+      setStatusMessage(`🎉 ${data.message || `Successfully prepared tailored application package for ${roleTitle}!`}`);
       // Refresh connection and parse analysis
       if (data.analysis) {
         setParsedAnalysis(data.analysis);
@@ -373,16 +373,16 @@ export default function LinkedInPage() {
                   <div>
                     <h3 className="text-sm font-bold text-white flex items-center space-x-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                      <span>Autonomous Applications Dispatched ({scoutResult.dispatched_applications.length})</span>
+                      <span>Tailored Application Packages Prepared ({scoutResult.dispatched_applications.length})</span>
                     </h3>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Tailored CVs generated and sent across all detected recruiter contact points
+                      Tailored CVs and outreach drafts prepared for candidate review in Approval Center
                     </p>
                   </div>
                   <div className="flex items-center space-x-3 text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">
-                    <span className="text-blue-400 font-bold">✉️ {scoutResult.channel_summary?.gmail_direct_emails} Gmail</span>
-                    <span className="text-emerald-400 font-bold">🌐 {scoutResult.channel_summary?.company_portals_submitted} Portals</span>
-                    <span className="text-indigo-400 font-bold">💬 {scoutResult.channel_summary?.linkedin_dms_sent} InMails</span>
+                    <span className="text-blue-400 font-bold">✉️ {scoutResult.channel_summary?.gmail_direct_emails} Drafts</span>
+                    <span className="text-emerald-400 font-bold">🌐 {scoutResult.channel_summary?.company_portals_submitted} Portal Guides</span>
+                    <span className="text-indigo-400 font-bold">💬 {scoutResult.channel_summary?.linkedin_dms_sent} InMail Drafts</span>
                   </div>
                 </div>
 

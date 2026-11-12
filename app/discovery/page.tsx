@@ -156,15 +156,15 @@ export default function DiscoveryPage() {
       const data = await res.json();
       if (data.success && data.application_result) {
         setApplySuccessMsg(
-          `⚡ Auto-Application dispatched for "${roleTitle}"! Tailored CV (${data.application_result.cv_title}) generated and direct outreach email sent to recruiter ${data.application_result.recruiter_email}.`
+          `⚡ Tailored package prepared for "${roleTitle}"! Tailored CV (${data.application_result.cv_title}) created and recruiter outreach draft saved. Ready for review in Approval Center.`
         );
         await fetchJobs();
         setTimeout(() => setApplySuccessMsg(null), 10000);
       } else {
-        setActionMessage(`Auto-apply error: ${data.error || 'Failed'}`);
+        setActionMessage(`Package preparation error: ${data.error || 'Failed'}`);
       }
     } catch (err: any) {
-      setActionMessage(`Auto-apply error: ${err.message}`);
+      setActionMessage(`Package preparation error: ${err.message}`);
     } finally {
       setApplyingRole(null);
     }
@@ -186,7 +186,7 @@ export default function DiscoveryPage() {
       }
 
       const data = await res.json();
-      setActionMessage(`Application package prepared! Dispatched to Approval Center for your review.`);
+      setActionMessage(`Application package prepared! Ready in Approval Center for your review.`);
       setTimeout(() => router.push('/approvals'), 1500);
     } catch (err: any) {
       setActionMessage(`Error: ${err.message}`);
@@ -226,7 +226,7 @@ export default function DiscoveryPage() {
           <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-300 text-xs flex items-start space-x-3 shadow-lg">
             <Mail className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="font-semibold text-white">Direct Recruiter Outreach Dispatched</p>
+              <p className="font-semibold text-white">Recruiter Outreach Draft Prepared</p>
               <p className="mt-0.5 leading-relaxed">{applySuccessMsg}</p>
             </div>
           </div>
