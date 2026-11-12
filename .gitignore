@@ -1,0 +1,62 @@
+# ==============================================================================
+# AI CAREER MANAGEMENT PLATFORM — MANDATORY SAFETY .gitignore
+# STRICT DATA ISOLATION & ZERO-LEAKAGE ENFORCEMENT
+# ==============================================================================
+
+# Dependencies & Package Managers
+node_modules/
+.pnp
+.pnp.js
+
+# Production & Development Build Outputs
+.next/
+out/
+build/
+dist/
+
+# Production SQLite Databases, WAL, SHM, and Test DBs (STRICT ISOLATION)
+data/career_app.db*
+data/career_app.db-wal
+data/career_app.db-shm
+data/staging_*.db*
+data/*.db
+data/*.db-wal
+data/*.db-shm
+*.sqlite
+*.sqlite3
+
+# Uploaded Candidate Resumes & Documents (STRICT PRIVACY EXCLUSION)
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Local Backups, Safety Snapshots & Temporary Restores
+backups/
+backups_safety/
+*.bak
+*.tar.gz
+*.zip
+
+# Environment Variables & Secret Credential Files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+
+# Diagnostics, Runtime Logs, and Local Caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tmp/
+temp/
+.turbo/
+*.tmp
+*.exe
+diagnostic_output.json
+acceptance_test_results.json
+.user_uploaded/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,22 @@
+# Version control
+.git
+.gitignore
+
+# Local dependencies & caches
+node_modules
+.next
+.turbo
+
+# Sensitive local databases and real candidate documents (STRICT ISOLATION)
+data/career_app.db*
+data/uploads/*
+backups/
+*.log
+*.exe
+
+# Temporary files
+.env*.local
+tmp/
+.user_uploaded/
+acceptance_test_results.json
+diagnostic_output.json
