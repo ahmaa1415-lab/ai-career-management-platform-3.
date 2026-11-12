@@ -425,7 +425,7 @@ export async function POST(req: Request) {
         user_id: user.id,
         title: originalFilename,
         version: nextVersion,
-        target_role: careerStrategy.primary_role_recommendation || extracted.current_headline || 'Professional',
+        target_role: careerStrategy.best_fit_titles?.[0] || extracted.current_headline || 'Professional',
         created_at: new Date().toISOString()
       },
       is_active: true,

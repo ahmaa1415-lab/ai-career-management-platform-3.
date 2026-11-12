@@ -4,7 +4,7 @@
  */
 
 export function isStagingMode(): boolean {
-  return process.env.STAGING_MODE === 'true' || process.env.NODE_ENV === 'staging';
+  return process.env.STAGING_MODE === 'true' || (process.env.NODE_ENV as string) === 'staging';
 }
 
 export function isRegistrationAllowed(providedCode?: string): boolean {
