@@ -4,7 +4,7 @@
 # ==============================================================================
 # STAGE 1: Dependencies & Native C++ Compilation
 # ==============================================================================
-FROM node:20-bookworm-slim AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 
 # Install build essentials required by node-gyp and better-sqlite3
@@ -23,7 +23,7 @@ RUN npm ci
 # ==============================================================================
 # STAGE 2: Application Builder
 # ==============================================================================
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,7 +43,7 @@ RUN npm run build
 # ==============================================================================
 # STAGE 3: Production Runner
 # ==============================================================================
-FROM node:20-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 
 # Install runtime utilities (sqlite3 CLI for automated healthchecks/backups)
