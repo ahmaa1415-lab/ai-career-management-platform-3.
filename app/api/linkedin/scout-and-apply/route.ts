@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateDefaultUser } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
+
 import {
   getLinkedInAccountConnection,
   runAutonomousLinkedInAgent,
-  dispatchMultiChannelApplication
+  dispatchMultiChannelApplication,
 } from '@/lib/linkedin/autonomous-scout';
 import { getFullProfile } from '@/lib/onboarding';
 
@@ -13,8 +13,10 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
+
     const candidate = getFullProfile(user.id);
     const connection = getLinkedInAccountConnection(user.id);
 
@@ -61,8 +63,10 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
+
     const candidate = getFullProfile(user.id);
     if (!candidate) {
       return NextResponse.json({ success: false, error: 'Candidate profile not initialized' }, { status: 400 });

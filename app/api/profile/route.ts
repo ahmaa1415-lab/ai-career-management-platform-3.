@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getFullProfile, saveOnboarding } from '@/lib/onboarding';
-import { getOrCreateDefaultUser } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -8,8 +7,11 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const userId = authUser ? authUser.id : getOrCreateDefaultUser().id;
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    }
+    const userId = authUser.id;
     const { searchParams } = new URL(req.url);
     const resumeId = searchParams.get('resume_id') || undefined;
     const full = getFullProfile(userId, resumeId);
@@ -23,8 +25,11 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const userId = authUser ? authUser.id : getOrCreateDefaultUser().id;
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    }
+    const userId = authUser.id;
     const body = await req.json();
 
     const updated = saveOnboarding(userId, {

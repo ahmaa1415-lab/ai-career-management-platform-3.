@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { recordEmployerConfirmation } from '@/lib/applications/workflow';
-import { getOrCreateDefaultUser } from '@/lib/db';
+
 import { getAuthenticatedUser } from '@/lib/auth';
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
+
     const body = await req.json();
     const { application_id, confirmation_reference, evidence_type, notes } = body;
 

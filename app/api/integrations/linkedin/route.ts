@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateDefaultUser } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 import {
   getLinkedInIntegration,
   getLinkedInDetailedStatus,
   updateLinkedInIntegration,
   generateLinkedInOAuthUrl,
-  syncLinkedInProfile
+  syncLinkedInProfile,
 } from '@/lib/integrations';
 
 export const dynamic = 'force-dynamic';
@@ -14,9 +13,10 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
     const { searchParams } = new URL(req.url);
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const action = searchParams.get('action');
 
     if (action === 'get_oauth_url') {
@@ -27,19 +27,18 @@ export async function GET(req: Request) {
         oauth_url: oauthData.authUrl,
         auth_url: oauthData.authUrl,
         state: oauthData.state,
-        scopes: 'openid profile email'
+        scopes: 'openid profile email',
       });
     }
 
     const details = getLinkedInDetailedStatus(user.id);
     const integration = getLinkedInIntegration(user.id);
-
     return NextResponse.json({
       success: true,
       ...details,
-      integration
+      integration,
     }, {
-      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' }
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' },
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -48,8 +47,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
     const action = body.action || 'save';
 
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
         oauth_url: oauthData.authUrl,
         auth_url: oauthData.authUrl,
         state: oauthData.state,
-        scopes: 'openid profile email'
+        scopes: 'openid profile email',
       });
     }
 
@@ -71,12 +71,12 @@ export async function POST(req: Request) {
       const updated = updateLinkedInIntegration(user.id, {
         status: 'Not Connected',
         client_secret: '',
-        sync_enabled: 0
+        sync_enabled: 0,
       });
       return NextResponse.json({
         success: true,
         message: 'LinkedIn account disconnected successfully.',
-        integration: updated
+        integration: updated,
       });
     }
 
@@ -86,7 +86,7 @@ export async function POST(req: Request) {
       if (currentInt.status !== 'Connected') {
         return NextResponse.json({
           success: false,
-          error: 'LinkedIn account is not connected. Active OAuth authorization is required before syncing.'
+          error: 'LinkedIn account is not connected. Active OAuth authorization is required before syncing.',
         }, { status: 400 });
       }
       const result = syncLinkedInProfile(user.id);
@@ -94,7 +94,7 @@ export async function POST(req: Request) {
         success: true,
         message: 'LinkedIn profile keywords, headline, and recruiter SEO aligned.',
         integration: result.integration,
-        summary: result.summary
+        summary: result.summary,
       });
     }
 
@@ -106,7 +106,7 @@ export async function POST(req: Request) {
         success: true,
         message: result.message,
         total_applied: result.total_linkedin_applied,
-        applications: result.applications
+        applications: result.applications,
       });
     }
 
@@ -116,16 +116,15 @@ export async function POST(req: Request) {
       client_id: body.client_id,
       client_secret: body.client_secret,
       status: body.status,
-      sync_enabled: body.sync_enabled
+      sync_enabled: body.sync_enabled,
     });
 
     const details = getLinkedInDetailedStatus(user.id);
-
     return NextResponse.json({
       success: true,
       message: 'LinkedIn integration settings updated.',
       ...details,
-      integration: updated
+      integration: updated,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 400 });

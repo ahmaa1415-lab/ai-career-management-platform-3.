@@ -149,10 +149,18 @@ ${emailsDrafted > 0
   };
 
   const reportId = `rep_${Date.now()}`;
-  db.prepare(`
-    INSERT INTO daily_reports (id, report_date, timezone, content_markdown, metrics_json)
-    VALUES (?, ?, 'Africa/Cairo', ?, ?)
-  `).run(reportId, reportDate, markdown, JSON.stringify(metrics));
+  const cols = (db.prepare('PRAGMA table_info(daily_reports)').all() as any[]).map((c: any) => c.name);
+  if (cols.includes('user_id')) {
+    db.prepare(`
+      INSERT INTO daily_reports (id, user_id, report_date, timezone, content_markdown, metrics_json)
+      VALUES (?, ?, ?, 'Africa/Cairo', ?, ?)
+    `).run(reportId, user.id, reportDate, markdown, JSON.stringify(metrics));
+  } else {
+    db.prepare(`
+      INSERT INTO daily_reports (id, report_date, timezone, content_markdown, metrics_json)
+      VALUES (?, ?, 'Africa/Cairo', ?, ?)
+    `).run(reportId, reportDate, markdown, JSON.stringify(metrics));
+  }
 
   logAudit('DAILY_REPORT_GENERATED', {
     report_id: reportId,
@@ -163,6 +171,36 @@ ${emailsDrafted > 0
   return db.prepare('SELECT * FROM daily_reports WHERE id = ?').get(reportId) as DailyReportRecord;
 }
 
-export function getAllDailyReports(): DailyReportRecord[] {
-  return db.prepare('SELECT * FROM daily_reports ORDER BY generated_at DESC').all() as DailyReportRecord[];
+export function getAllDailyReports(userId?: string): DailyReportRecord[] {
+  if (!userId || typeof userId !== 'string' || !userId.trim()) {
+    return []; // Fail closed: unauthenticated or missing userId never receives reports
+  }
+  const cleanUserId = userId.trim();
+
+  const cols = (db.prepare('PRAGMA table_info(daily_reports)').all() as any[]).map((c: any) => c.name);
+  if (cols.includes('user_id')) {
+    return db.prepare('SELECT * FROM daily_reports WHERE user_id = ? ORDER BY generated_at DESC').all(cleanUserId) as DailyReportRecord[];
+  }
+
+  // Schema note: daily_reports lacks user_id; isolate via user's audit log references.
+  // Fail-closed security rule: A report is only returned if it was generated strictly and exclusively
+  // for this single user. Any report with ambiguous or multi-user audit associations is omitted.
+  const unambiguousUserReports = db.prepare(`
+    SELECT json_extract(details, '$.report_id') as report_id
+    FROM audit_logs
+    WHERE action = 'DAILY_REPORT_GENERATED'
+    GROUP BY json_extract(details, '$.report_id')
+    HAVING COUNT(DISTINCT user_id) = 1 AND MAX(user_id) = ?
+  `).all(cleanUserId) as { report_id?: string }[];
+
+  const reportIds = unambiguousUserReports.map(r => r.report_id).filter(Boolean);
+  if (reportIds.length === 0) {
+    return [];
+  }
+  const placeholders = reportIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT * FROM daily_reports
+    WHERE id IN (${placeholders})
+    ORDER BY generated_at DESC
+  `).all(...reportIds) as DailyReportRecord[];
 }

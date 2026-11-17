@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { parseCVFile, extractCVContent } from '@/lib/cv-extractor';
 import { generateOptimizedMasterCV, generateCareerStrategy } from '@/lib/cv-optimizer';
 import { analyzeResume } from '@/lib/ai/ats-analyzer';
-import db, { getOrCreateDefaultUser, logAudit, setActiveResume } from '@/lib/db';
+import db, { logAudit, setActiveResume } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { fileLockCoordinator, safelyDeletePersistentUpload } from '@/lib/security';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -16,9 +17,11 @@ const UNSUPPORTED_EXTENSIONS = new Set([
 ]);
 
 export async function POST(req: Request) {
+  let diskPath = '';
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     let cvText = '';
     let originalFilename = 'uploaded_cv.txt';
     let fileBuffer: Buffer | null = null;
@@ -96,13 +99,29 @@ export async function POST(req: Request) {
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
-    const diskPath = path.join(uploadsDir, `${resumeId}_${originalFilename}`);
-    fs.writeFileSync(diskPath, fileBuffer);
+    diskPath = path.join(uploadsDir, `${resumeId}_${originalFilename}`);
+
+    // Coordination Gate: Acquire reference lease before writing physical file or creating DB references
+    const uploadLeaseHolder = `upload_${user.id}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const uploadLeaseToken = `tok_ref_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+    const refAcquired = fileLockCoordinator.acquireReferenceLease(diskPath, 30000, uploadLeaseHolder, uploadLeaseToken);
+    if (!refAcquired) {
+      return NextResponse.json({
+        error: `Concurrency Conflict: File '${path.basename(diskPath)}' is actively undergoing deletion. Reference rejected.`
+      }, { status: 409 });
+    }
+
+    // Active Lease Heartbeat: Continuously renew reference lease while upload processing is active
+    const heartbeat = fileLockCoordinator.createLeaseHeartbeat(diskPath, uploadLeaseHolder, uploadLeaseToken, 8000, 30000);
+
+    try {
+      fs.writeFileSync(diskPath, fileBuffer);
 
     // Validate extracted text
     if (!cvText || cvText.trim().length < 20) {
       // Record failed extraction attempt in resumes table
       try {
+        fileLockCoordinator.assertReferenceLeaseValid(diskPath, uploadLeaseHolder, uploadLeaseToken);
         db.prepare(`
           INSERT INTO resumes (
             id, user_id, title, type, target_role, target_country, raw_text,
@@ -130,82 +149,109 @@ export async function POST(req: Request) {
     `).get(user.id, fileHash) as any;
 
     if (existingDuplicate) {
-      // Activate this duplicate resume as the platform's single source of truth
-      setActiveResume(user.id, existingDuplicate.id);
+      // Coordination Gate: Ensure existing duplicate path is not undergoing deletion
+      const dupPath = existingDuplicate.stored_file_path;
+      const dupHolder = `upload_dup_${user.id}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const dupToken = `tok_dup_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+      let dupHeartbeat: { stop: () => void; assertValid: () => void } | null = null;
+      if (dupPath) {
+        const dupAcquired = fileLockCoordinator.acquireReferenceLease(dupPath, 30000, dupHolder, dupToken);
+        if (!dupAcquired) {
+          return NextResponse.json({
+            error: `Concurrency Conflict: File '${path.basename(dupPath)}' is actively undergoing deletion. Reference rejected.`
+          }, { status: 409 });
+        }
+        dupHeartbeat = fileLockCoordinator.createLeaseHeartbeat(dupPath, dupHolder, dupToken, 8000, 30000);
+      }
 
-      // Invalidate unsubmitted applications generated from prior resumes
-      db.prepare(`
-        UPDATE applications
-        SET is_outdated = 1,
-            outdated_reason = 'Generated from prior resume version. Please review and regenerate package with latest CV.'
-        WHERE user_id = ?
-          AND status IN ('Approval Pending', 'Ready to Apply')
-          AND (source_resume_id IS NULL OR source_resume_id != ?)
-      `).run(user.id, existingDuplicate.id);
+      try {
+        if (dupPath) {
+          fileLockCoordinator.assertReferenceLeaseValid(dupPath, dupHolder, dupToken);
+        }
+        // Activate this duplicate resume as the platform's single source of truth
+        setActiveResume(user.id, existingDuplicate.id);
 
-      // Fetch linked optimized Version B CV
-      const optRow = db.prepare(`
-        SELECT * FROM resumes
-        WHERE (id = ? OR source_text_reference = ?) AND type = 'ATS'
-        LIMIT 1
-      `).get(`opt_${existingDuplicate.id}`, existingDuplicate.stored_file_path) as any;
+        // Invalidate unsubmitted applications generated from prior resumes
+        db.prepare(`
+          UPDATE applications
+          SET is_outdated = 1,
+              outdated_reason = 'Generated from prior resume version. Please review and regenerate package with latest CV.'
+          WHERE user_id = ?
+            AND status IN ('Approval Pending', 'Ready to Apply')
+            AND (source_resume_id IS NULL OR source_resume_id != ?)
+        `).run(user.id, existingDuplicate.id);
 
-      // Fetch ATS evaluation
-      const evalRow = db.prepare(`
-        SELECT * FROM cv_evaluations
-        WHERE resume_id = ? OR id = ?
-        ORDER BY evaluation_date DESC
-        LIMIT 1
-      `).get(existingDuplicate.id, existingDuplicate.ats_report_id || '') as any;
+        // Fetch linked optimized Version B CV
+        const optRow = db.prepare(`
+          SELECT * FROM resumes
+          WHERE (id = ? OR source_text_reference = ?) AND type = 'ATS'
+          LIMIT 1
+        `).get(`opt_${existingDuplicate.id}`, existingDuplicate.stored_file_path) as any;
 
-      logAudit('RESUME_ACTIVATED_EXISTING', {
-        resume_id: existingDuplicate.id,
-        filename: originalFilename,
-        file_hash: fileHash
-      }, user.id);
+        // Fetch ATS evaluation
+        const evalRow = db.prepare(`
+          SELECT * FROM cv_evaluations
+          WHERE resume_id = ? OR id = ?
+          ORDER BY evaluation_date DESC
+          LIMIT 1
+        `).get(existingDuplicate.id, existingDuplicate.ats_report_id || '') as any;
 
-      return NextResponse.json({
-        success: true,
-        is_duplicate: true,
-        is_active: true,
-        active_resume_id: existingDuplicate.id,
-        version: existingDuplicate.version || 1,
-        message: `Identical file content detected (previously uploaded as "${existingDuplicate.original_filename}"). Set as active single source of truth across all 10 modules.`,
-        resume_id: existingDuplicate.id,
-        original_filename: originalFilename,
-        file_hash: fileHash,
-        raw_cv_text: existingDuplicate.raw_text,
-        extracted_profile: {
-          candidate_name: existingDuplicate.candidate_name,
-          current_headline: existingDuplicate.current_headline || existingDuplicate.target_role,
-          location: existingDuplicate.location || existingDuplicate.target_country,
-          skills: JSON.parse(existingDuplicate.skills_json || '[]'),
-          experiences: JSON.parse(existingDuplicate.experiences_json || '[]')
-        },
-        ats_evaluation: evalRow ? {
-          ...evalRow,
-          overall_score: evalRow.ats_compatibility_score || existingDuplicate.ats_score,
-          criterion_scores: JSON.parse(evalRow.criterion_scores_json || '{}'),
-          evidence: JSON.parse(evalRow.evidence_json || '{}'),
-          recommendations: JSON.parse(evalRow.recommendations_json || '[]')
-        } : { overall_score: existingDuplicate.ats_score },
-        optimized_master_cv: optRow ? {
-          version_b_optimized: { raw_text: optRow.raw_text },
-          score_comparison: { improved_score: optRow.ats_score }
-        } : null,
-        stages_completed: [
-          'uploaded',
-          'validated',
-          'extracted',
-          'parsed',
-          'analyzed',
-          'saved_profile',
-          'activated',
-          'synchronized'
-        ]
-      }, {
-        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' }
-      });
+        logAudit('RESUME_ACTIVATED_EXISTING', {
+          resume_id: existingDuplicate.id,
+          filename: originalFilename,
+          file_hash: fileHash
+        }, user.id);
+
+        return NextResponse.json({
+          success: true,
+          is_duplicate: true,
+          is_active: true,
+          active_resume_id: existingDuplicate.id,
+          version: existingDuplicate.version || 1,
+          message: `Identical file content detected (previously uploaded as "${existingDuplicate.original_filename}"). Set as active single source of truth across all 10 modules.`,
+          resume_id: existingDuplicate.id,
+          original_filename: originalFilename,
+          file_hash: fileHash,
+          raw_cv_text: existingDuplicate.raw_text,
+          extracted_profile: {
+            candidate_name: existingDuplicate.candidate_name,
+            current_headline: existingDuplicate.current_headline || existingDuplicate.target_role,
+            location: existingDuplicate.location || existingDuplicate.target_country,
+            skills: JSON.parse(existingDuplicate.skills_json || '[]'),
+            experiences: JSON.parse(existingDuplicate.experiences_json || '[]')
+          },
+          ats_evaluation: evalRow ? {
+            ...evalRow,
+            overall_score: evalRow.ats_compatibility_score || existingDuplicate.ats_score,
+            criterion_scores: JSON.parse(evalRow.criterion_scores_json || '{}'),
+            evidence: JSON.parse(evalRow.evidence_json || '{}'),
+            recommendations: JSON.parse(evalRow.recommendations_json || '[]')
+          } : { overall_score: existingDuplicate.ats_score },
+          optimized_master_cv: optRow ? {
+            version_b_optimized: { raw_text: optRow.raw_text },
+            score_comparison: { improved_score: optRow.ats_score }
+          } : null,
+          stages_completed: [
+            'uploaded',
+            'validated',
+            'extracted',
+            'parsed',
+            'analyzed',
+            'saved_profile',
+            'activated',
+            'synchronized'
+          ]
+        }, {
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' }
+        });
+      } finally {
+        if (dupHeartbeat) {
+          dupHeartbeat.stop();
+        }
+        if (dupPath) {
+          fileLockCoordinator.releaseReferenceLease(dupPath, dupHolder, dupToken);
+        }
+      }
     }
 
     // Determine auto-incremented version number for this master resume
@@ -215,6 +261,9 @@ export async function POST(req: Request) {
       WHERE user_id = ? AND type = 'Master'
     `).get(user.id) as any;
     const nextVersion = (lastVersionRow?.max_v || 0) + 1;
+
+    // Fencing Token Verification: Ensure reference lease is still active and valid before committing DB reference
+    fileLockCoordinator.assertReferenceLeaseValid(diskPath, uploadLeaseHolder, uploadLeaseToken);
 
     // 1. Persist Initial Original Resume Record in resumes table (satisfies foreign key constraints)
     const extractedProfileId = `ext_${resumeId}`;
@@ -451,8 +500,38 @@ export async function POST(req: Request) {
     }, {
       headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' }
     });
+    } finally {
+      if (heartbeat) {
+        heartbeat.stop();
+      }
+      fileLockCoordinator.releaseReferenceLease(diskPath, uploadLeaseHolder, uploadLeaseToken);
+    }
   } catch (err: any) {
     console.error('CV Upload processing error:', err);
+    if (err.message && err.message.includes('Concurrency Conflict')) {
+      // Clean up orphaned physical file if upload was rejected before DB commit
+      // STRICT INVARIANT: Route cleanup through the coordinated deletion service
+      if (diskPath) {
+        try {
+          const cleanupResult = safelyDeletePersistentUpload(diskPath, {
+            holderPrefix: 'upload_conflict',
+            reason: 'Upload rejected due to Concurrency Conflict before DB commit'
+          });
+          if (!cleanupResult.unlinked) {
+            logAudit('UPLOAD_CLEANUP_PENDING_PRESERVED', {
+              file: diskPath,
+              reason: cleanupResult.skippedReason || cleanupResult.error
+            });
+          }
+        } catch (cleanupErr: any) {
+          logAudit('UPLOAD_CLEANUP_PENDING_PRESERVED', {
+            file: diskPath,
+            error: cleanupErr.message
+          });
+        }
+      }
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

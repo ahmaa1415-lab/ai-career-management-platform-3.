@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
-import db, { logAudit, getOrCreateDefaultUser } from '@/lib/db';
+import db, { logAudit } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
+
     const saved = db.prepare(`
       SELECT s.*, j.title, j.employer, j.location, j.salary_raw, j.freshness_classification, j.verification_status
       FROM saved_opportunities s
@@ -22,8 +24,10 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
+
     const { job_id, notes } = await req.json();
 
     if (!job_id) {
@@ -47,8 +51,10 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
+
     const { searchParams } = new URL(req.url);
     const jobId = searchParams.get('job_id');
 

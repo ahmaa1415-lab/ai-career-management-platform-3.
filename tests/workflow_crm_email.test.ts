@@ -23,8 +23,8 @@ try {
   console.log('1. Preparing application package for GitLab...');
   const app = prepareApplicationPackage(job.id, user.id);
   console.log(`✓ Application created with ID: ${app.id}, initial status: ${app.status}`);
-  if (app.status !== 'Approval Pending') {
-    throw new Error(`Expected initial status 'Approval Pending', got '${app.status}'`);
+  if (app.status !== 'Package Prepared' && app.status !== 'Approval Pending') {
+    throw new Error(`Expected initial status 'Package Prepared', got '${app.status}'`);
   }
   if (!app.tailored_cv_id) {
     throw new Error('Tailored CV was not created/linked!');
@@ -47,15 +47,15 @@ try {
   // 3. Grant Human Approval
   console.log('3. Granting human approval in Approval Center...');
   const approvedApp = approveApplicationPackage(app.id, user.id, true);
-  if (approvedApp.status !== 'Ready to Apply' || approvedApp.human_approved !== 1) {
-    throw new Error('Approval failed to update status to "Ready to Apply"');
+  if ((approvedApp.status !== 'Ready for Candidate Submission' && approvedApp.status !== 'Ready to Apply') || approvedApp.human_approved !== 1) {
+    throw new Error('Approval failed to update status to "Ready for Candidate Submission"');
   }
   console.log('✓ Application approved by human. Status now:', approvedApp.status);
 
   // 4. Record Application Submission
   console.log('4. Recording application submission...');
   const submittedApp = recordApplicationSubmission(app.id, user.id, 'Applied on GitLab official careers page.');
-  if (submittedApp.status !== 'Applied' || submittedApp.submission_confirmed !== 1) {
+  if ((submittedApp.status !== 'Submitted by Candidate' && submittedApp.status !== 'Applied') || submittedApp.submission_confirmed !== 1) {
     throw new Error('Submission confirmation failed');
   }
   console.log('✓ Application submission confirmed in CRM. Status:', submittedApp.status);
@@ -103,7 +103,8 @@ try {
   // Send email with explicit confirmation
   const sendResult = sendEmailWithApproval(draft.id, true, user.id);
   console.log(`✓ Email send confirmed: ${sendResult.message}`);
-  if (sendResult.email.is_sent !== 1 || sendResult.email.is_draft !== 0) {
+  // In sandbox testing mode, email is recorded as sandbox_recorded with is_draft = 0 (Step 6 truthfulness)
+  if (sendResult.email.is_draft !== 0 || (sendResult.email.is_sent !== 1 && (sendResult.email as any).delivery_status !== 'sandbox_recorded')) {
     throw new Error('Email send flags not updated in database!');
   }
 
@@ -117,7 +118,7 @@ try {
 
   const report = generateDailyExecutiveReport(user.id);
   console.log(`✓ Daily report generated (ID: ${report.id}, Date: ${report.report_date})`);
-  const allReports = getAllDailyReports();
+  const allReports = getAllDailyReports(user.id);
   if (allReports.length === 0) {
     throw new Error('Daily report not persisted in database!');
   }

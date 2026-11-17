@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateDefaultUser } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 import { getFullProfile } from '@/lib/onboarding';
 import { getVerifiedJobListings } from '@/lib/jobs/aggregator';
 import { generateInterviewPreparationPackage, evaluateMockAnswer } from '@/lib/ai/interview-prep';
 
 export async function GET(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const candidate = getFullProfile(user.id);
     if (!candidate) {
       return NextResponse.json({ error: 'Candidate profile not initialized' }, { status: 400 });
@@ -38,7 +40,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const candidate = getFullProfile(user.id);
     if (!candidate) {
       return NextResponse.json({ error: 'Candidate profile not initialized' }, { status: 400 });

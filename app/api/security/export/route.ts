@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { exportCompleteUserData } from '@/lib/security';
-import { getOrCreateDefaultUser } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const data = exportCompleteUserData(user.id);
     return new Response(JSON.stringify(data, null, 2), {
       headers: {

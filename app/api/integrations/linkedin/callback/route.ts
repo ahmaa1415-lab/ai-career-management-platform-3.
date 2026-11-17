@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth';
-import { getOrCreateDefaultUser } from '@/lib/db';
 import db, { logAudit } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -13,8 +12,9 @@ export async function GET(req: Request) {
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
 
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
 
     if (error) {
       logAudit('LINKEDIN_OAUTH_FAILED', { error, errorDescription }, user.id);

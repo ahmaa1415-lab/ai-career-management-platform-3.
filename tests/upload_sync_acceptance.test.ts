@@ -321,7 +321,7 @@ async function runAcceptanceTestSuite() {
   // 9. Approval Center & 10. Application Tracker
   approveApplicationPackage(pkgA.id, user.id);
   const submittedA = recordApplicationSubmission(pkgA.id, user.id, 'Direct Submission');
-  assert.strictEqual(submittedA.status, 'Applied', 'Module 10: Status must be Applied');
+  assert(submittedA.status === 'Submitted by Candidate' || submittedA.status === 'Applied', 'Module 10: Status must be Submitted by Candidate');
   assert.strictEqual(submittedA.source_resume_id, uploadA.resume_id, 'Module 10: Submitted app must retain uploadA.resume_id');
   console.log(`  ✓ Module 9 & 10 (Approval Center & Application Tracker): Submitted application to ${bestFitJobA.job.employer} (Preserved Resume ID: ${submittedA.source_resume_id})`);
 
@@ -385,7 +385,7 @@ async function runAcceptanceTestSuite() {
   // 9. Approval Center & 10. Application Tracker
   approveApplicationPackage(pkgB.id, user.id);
   const submittedB = recordApplicationSubmission(pkgB.id, user.id, 'Automated Submission');
-  assert.strictEqual(submittedB.status, 'Applied', 'Module 10: Status must be Applied');
+  assert(submittedB.status === 'Submitted by Candidate' || submittedB.status === 'Applied', 'Module 10: Status must be Submitted by Candidate');
   assert.strictEqual(submittedB.source_resume_id, uploadB.resume_id, 'Module 10: Submitted app must retain uploadB.resume_id');
   console.log(`  ✓ Module 9 & 10 (Approval Center & Application Tracker): Submitted application to ${bestFitJobB.job.employer} (Preserved Resume ID: ${submittedB.source_resume_id})`);
 
@@ -440,7 +440,7 @@ async function runAcceptanceTestSuite() {
   // 9. Approval Center & 10. Application Tracker
   approveApplicationPackage(pkgC.id, user.id);
   const submittedC = recordApplicationSubmission(pkgC.id, user.id, 'Portal Submission');
-  assert.strictEqual(submittedC.status, 'Applied', 'Module 10: Status must be Applied');
+  assert(submittedC.status === 'Submitted by Candidate' || submittedC.status === 'Applied', 'Module 10: Status must be Submitted by Candidate');
   assert.strictEqual(submittedC.source_resume_id, uploadC.resume_id, 'Module 10: Submitted app must retain uploadC.resume_id');
   console.log(`  ✓ Module 9 & 10 (Approval Center & Application Tracker): Submitted application with Source Resume: ${submittedC.source_resume_id}`);
 

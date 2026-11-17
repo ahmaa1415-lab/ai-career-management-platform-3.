@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db, { getOrCreateDefaultUser, logAudit } from '@/lib/db';
+import db, { logAudit } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { getFullProfile } from '@/lib/onboarding';
 import { getAllVerifiedJobs, syncAndDeduplicateJobs } from '@/lib/jobs/aggregator';
@@ -12,9 +12,10 @@ export const revalidate = 0;
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
-    const body = await req.json();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
+     const body = await req.json();
 
     const {
       current_physical_location,

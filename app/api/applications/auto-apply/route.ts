@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateDefaultUser } from '@/lib/db';
+
 import { runAutonomousApplyEverywhere, getAutopilotStatus } from '@/lib/applications/autonomous-engine';
 import { getAuthenticatedUser } from '@/lib/auth';
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
+
     const status = getAutopilotStatus(user.id);
     return NextResponse.json({ success: true, autopilot: status });
   } catch (error: any) {
@@ -16,8 +18,10 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
+
     let body: any = {};
     try {
       body = await req.json();

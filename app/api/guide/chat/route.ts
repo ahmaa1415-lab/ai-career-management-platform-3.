@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateDefaultUser, logAudit } from '@/lib/db';
+import { logAudit } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 import { generateGuideResponse } from '@/lib/ai/chatbot-guide';
 
 export async function POST(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
     const { message, currentPath, history } = body;
 

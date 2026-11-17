@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getCompanyPortalAccounts, getCompanyPortalStats, autoProvisionCompanyPortalAccount } from '@/lib/company-portals';
-import { getOrCreateDefaultUser } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 import { getFullProfile } from '@/lib/onboarding';
 import db from '@/lib/db';
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ success: false, error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const stats = getCompanyPortalStats(user.id);
 
     return NextResponse.json({
@@ -24,8 +26,10 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ success: false, error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
-    const user = getOrCreateDefaultUser();
     const candidate = getFullProfile(user.id);
 
     if (!candidate) {

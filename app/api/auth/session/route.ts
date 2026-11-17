@@ -5,10 +5,23 @@ import { getOrCreateDefaultUser } from '@/lib/db';
 
 export async function GET(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('career_session');
+    let sessionToken: string | undefined;
+    try {
+      const cookieStore = await cookies();
+      sessionToken = cookieStore.get('career_session')?.value;
+    } catch (_) {
+      // Outside async request store (e.g. test runner)
+    }
 
-    if (!sessionCookie?.value) {
+    if (!sessionToken) {
+      const cookieHeader = req.headers.get('cookie');
+      if (cookieHeader) {
+        const match = cookieHeader.match(/career_session=([^;]+)/);
+        if (match) sessionToken = match[1].trim();
+      }
+    }
+
+    if (!sessionToken) {
       // Check Authorization header fallback
       const authHeader = req.headers.get('authorization');
       if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -21,7 +34,7 @@ export async function GET(req: Request) {
 
       // Check if candidate session fallback requested
       const url = new URL(req.url);
-      if (url.searchParams.get('fallback') === 'default') {
+      if (url.searchParams.get('fallback') === 'default' && process.env.NODE_ENV !== 'production') {
         const defaultUser = getOrCreateDefaultUser();
         return NextResponse.json({ authenticated: true, user: defaultUser });
       }
@@ -29,7 +42,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ authenticated: false, user: null }, { status: 401 });
     }
 
-    const user = validateSessionToken(sessionCookie.value);
+    const user = validateSessionToken(sessionToken);
     if (!user) {
       return NextResponse.json({ authenticated: false, user: null }, { status: 401 });
     }

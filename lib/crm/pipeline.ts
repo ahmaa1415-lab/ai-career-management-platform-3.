@@ -103,10 +103,16 @@ export function getAllApplications(userId?: string, filterStatus?: string, searc
 export function updateApplicationStatus(
   applicationId: string,
   newStatus: PipelineStage,
-  notes?: string,
-  userId?: string
+  notes: string | undefined,
+  userId: string
 ): ApplicationRecord {
-  const user = userId || 'default-user';
+  if (!applicationId || typeof applicationId !== 'string' || !applicationId.trim()) {
+    throw new Error('Validation Error: applicationId is required.');
+  }
+  if (!userId || typeof userId !== 'string' || !userId.trim()) {
+    throw new Error('Mandatory Parameter Missing: A valid, authenticated userId is required to update application status.');
+  }
+  const cleanUserId = userId.trim();
 
   // Step 4 Guard: Prevent manual CRM stage mutations from fabricating confirmed submissions or verified receipts
   if (newStatus === 'Submitted by Candidate') {
@@ -124,32 +130,45 @@ export function updateApplicationStatus(
     ? 'Legacy Applied – Unverified'
     : newStatus;
 
-  let updateQuery = `
-    UPDATE applications
-    SET status = ?,
-        updated_at = CURRENT_TIMESTAMP
-  `;
-  const params: any[] = [normalizedStatus];
+  // Atomic transaction protects check, scoped mutation, audit logging, and read-back against race conditions
+  return db.transaction(() => {
+    // Verify application existence and enforce tenant ownership
+    const existingApp = db.prepare('SELECT id, user_id FROM applications WHERE id = ?').get(applicationId) as any;
+    if (!existingApp) {
+      throw new Error(`Application ${applicationId} not found`);
+    }
+    if (existingApp.user_id !== cleanUserId) {
+      throw new Error('Access Denied: Candidate does not own this application record.');
+    }
 
-  if (notes) {
-    updateQuery += ', notes = ?';
-    params.push(notes);
-  }
+    let updateQuery = `
+      UPDATE applications
+      SET status = ?,
+          updated_at = CURRENT_TIMESTAMP
+    `;
+    const params: any[] = [normalizedStatus];
 
-  updateQuery += ' WHERE id = ?';
-  params.push(applicationId);
+    if (notes && typeof notes === 'string' && notes.trim()) {
+      updateQuery += ', notes = ?';
+      params.push(notes.trim());
+    }
 
-  db.prepare(updateQuery).run(...params);
+    updateQuery += ' WHERE id = ? AND user_id = ?';
+    params.push(applicationId, cleanUserId);
 
-  logAudit('CRM_STATUS_UPDATED', {
-    application_id: applicationId,
-    new_status: normalizedStatus,
-    notes
-  }, user);
+    const updateResult = db.prepare(updateQuery).run(...params);
+    if (updateResult.changes === 0) {
+      throw new Error('Update failed: Application record not found or candidate does not own this application.');
+    }
 
-  const existingApp = db.prepare('SELECT user_id FROM applications WHERE id = ?').get(applicationId) as any;
-  const targetUserId = existingApp?.user_id || user;
-  return getAllApplications(targetUserId).find(a => a.id === applicationId)!;
+    logAudit('CRM_STATUS_UPDATED', {
+      application_id: applicationId,
+      new_status: normalizedStatus,
+      notes
+    }, cleanUserId);
+
+    return getAllApplications(cleanUserId).find(a => a.id === applicationId)!;
+  })();
 }
 
 export function exportCRMDataAsJSON(userId?: string): string {

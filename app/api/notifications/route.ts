@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db, { getOrCreateDefaultUser } from '@/lib/db';
+import db from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { classifyApplicationLifecycle } from '@/lib/applications/lifecycle';
 
@@ -8,8 +8,9 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
 
     // 1. Fetch recent audit logs as system notifications (schema uses 'timestamp' column)
     const logs = db.prepare(`

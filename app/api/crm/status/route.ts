@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getAllApplications, updateApplicationStatus, exportCRMDataAsCSV, exportCRMDataAsJSON, PipelineStage } from '@/lib/crm/pipeline';
-import { getOrCreateDefaultUser } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -8,8 +7,9 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const { searchParams } = new URL(req.url);
     const filter = searchParams.get('status') || undefined;
     const search = searchParams.get('search') || undefined;
@@ -46,8 +46,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
     const { application_id, new_status, notes } = body;
 

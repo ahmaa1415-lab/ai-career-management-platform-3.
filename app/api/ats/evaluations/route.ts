@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getCVEvaluations, getCVEvaluationById } from '@/lib/db';
-import { getOrCreateDefaultUser } from '@/lib/db';
+
 import { getAuthenticatedUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -8,8 +8,9 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
     const compareA = searchParams.get('compareA');

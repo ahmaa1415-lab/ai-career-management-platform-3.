@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getOrCreateDefaultUser } from '@/lib/db';
+
 import { getAuthenticatedUser } from '@/lib/auth';
 import {
   getAllConnectedPortals,
@@ -12,8 +12,9 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const portals = getAllConnectedPortals(user.id);
     return NextResponse.json({
       success: true,
@@ -29,8 +30,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
     const service = body.service || 'linkedin';
     const action = body.action || 'sync';

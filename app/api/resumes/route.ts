@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db, { getOrCreateDefaultUser, setActiveResume } from '@/lib/db';
+import db, { setActiveResume } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { analyzeResume } from '@/lib/ai/ats-analyzer';
 
@@ -8,8 +8,9 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const url = new URL(req.url);
     const resumeId = url.searchParams.get('id');
 
@@ -74,8 +75,9 @@ export async function GET(req: Request) {
 
 export async function PUT(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
     const { resume_id } = body;
     if (!resume_id) {
@@ -131,8 +133,9 @@ export async function PUT(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const authUser = await getAuthenticatedUser(req, { allowDefaultFallback: true });
-    const user = authUser ? authUser : getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
 
     const title = body.title || 'Custom Resume';

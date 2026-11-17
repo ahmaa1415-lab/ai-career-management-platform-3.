@@ -396,6 +396,24 @@ export function initializeSchema() {
       processed_at DATETIME,
       status TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS file_deletion_leases (
+      file_path TEXT PRIMARY KEY,
+      locked_by TEXT NOT NULL,
+      locked_at DATETIME NOT NULL,
+      expires_at DATETIME NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS file_coordination_leases (
+      file_path TEXT NOT NULL,
+      lease_type TEXT NOT NULL,
+      locked_by TEXT NOT NULL,
+      lease_token TEXT,
+      locked_at DATETIME NOT NULL,
+      expires_at DATETIME NOT NULL,
+      PRIMARY KEY (file_path, locked_by)
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_coordination_lookup ON file_coordination_leases(file_path, lease_type, expires_at);
   `);
 
   // Safe idempotent column additions
@@ -406,6 +424,8 @@ export function initializeSchema() {
       // Column already exists, ignore
     }
   }
+
+  safeAddColumn('file_coordination_leases', 'lease_token TEXT');
 
   safeAddColumn('users', 'password_hash TEXT');
   safeAddColumn('users', "role TEXT DEFAULT 'candidate'");

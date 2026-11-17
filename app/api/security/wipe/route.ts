@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { wipeAllUserData } from '@/lib/security';
-import { getOrCreateDefaultUser } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 
 export async function POST(req: Request) {
   try {
-    const user = getOrCreateDefaultUser();
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    const user = authUser;
     const body = await req.json();
 
     if (body.confirmation !== 'DELETE ALL MY DATA') {

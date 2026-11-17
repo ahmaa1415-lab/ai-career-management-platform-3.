@@ -439,7 +439,7 @@ export async function getAuthenticatedUser(
   }
 
   // 4. Default fallback if explicitly permitted (e.g. for unauthenticated guest dev mode)
-  if (options.allowDefaultFallback) {
+  if (options.allowDefaultFallback && process.env.NODE_ENV !== 'production') {
     const defaultUser = db.prepare("SELECT * FROM users WHERE id = 'user_default_01'").get() as any;
     if (defaultUser) {
       return {
