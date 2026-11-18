@@ -184,6 +184,7 @@ export function initializeSchema() {
 
     CREATE TABLE IF NOT EXISTS emails (
       id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
       application_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
       category TEXT NOT NULL,
       sender TEXT NOT NULL,
@@ -519,6 +520,8 @@ export function initializeSchema() {
       CREATE INDEX IF NOT EXISTS idx_resumes_file_hash ON resumes(file_hash);
       CREATE INDEX IF NOT EXISTS idx_resumes_user_created ON resumes(user_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_extracted_profiles_resume ON extracted_profiles(resume_id);
+      CREATE INDEX IF NOT EXISTS idx_emails_user_id ON emails(user_id);
+      CREATE INDEX IF NOT EXISTS idx_emails_user_category ON emails(user_id, category);
     `);
   } catch {}
 }

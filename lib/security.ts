@@ -84,12 +84,14 @@ export function exportCompleteUserData(userId: string) {
   const savedOpportunities = db.prepare('SELECT * FROM saved_opportunities WHERE user_id = ?').all(cleanUserId);
   const portalAccounts = db.prepare('SELECT * FROM company_portal_accounts WHERE user_id = ?').all(cleanUserId);
   const settings = db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(cleanUserId);
-  const emails = db.prepare(`
-    SELECT id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at, created_at
-    FROM emails
-    WHERE application_id IN (SELECT id FROM applications WHERE user_id = ?)
-       OR (application_id IS NULL AND (recipient = (SELECT email FROM users WHERE id = ?) OR sender = (SELECT email FROM users WHERE id = ?)))
-  `).all(cleanUserId, cleanUserId, cleanUserId);
+  const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+  const emails = emailCols.includes('user_id')
+    ? db.prepare('SELECT * FROM emails WHERE user_id = ?').all(cleanUserId)
+    : db.prepare(`
+        SELECT e.* FROM emails e
+        JOIN applications a ON e.application_id = a.id
+        WHERE a.user_id = ?
+      `).all(cleanUserId);
   const auditLogs = db.prepare('SELECT id, action, details, timestamp FROM audit_logs WHERE user_id = ?').all(cleanUserId);
 
   return {
@@ -813,15 +815,18 @@ export function wipeAllUserData(userId: string): WipeUserDataResult {
     deleteFromTable('sessions', 'DELETE FROM sessions WHERE user_id = ?', cleanUserId);
     deleteFromTable('password_reset_tokens', 'DELETE FROM password_reset_tokens WHERE user_id = ?', cleanUserId);
     deleteFromTable('user_settings', 'DELETE FROM user_settings WHERE user_id = ?', cleanUserId);
-    // Dependent emails: strictly delete emails belonging to user's applications,
-    // or unlinked emails where user was sender/recipient, ensuring other users' applications are never affected
-    deleteFromTable(
-      'emails',
-      `DELETE FROM emails
-       WHERE application_id IN (SELECT id FROM applications WHERE user_id = ?)
-          OR (application_id IS NULL AND (recipient = (SELECT email FROM users WHERE id = ?) OR sender = (SELECT email FROM users WHERE id = ?)))`,
-      cleanUserId, cleanUserId, cleanUserId
-    );
+    // Dependent emails: strictly delete emails belonging to user, ensuring other users' records are never affected.
+    // Never infers ownership from untrusted sender or recipient text headers.
+    const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+    if (emailCols.includes('user_id')) {
+      deleteFromTable('emails', 'DELETE FROM emails WHERE user_id = ?', cleanUserId);
+    } else {
+      deleteFromTable(
+        'emails',
+        `DELETE FROM emails WHERE application_id IN (SELECT id FROM applications WHERE user_id = ?)`,
+        cleanUserId
+      );
+    }
     deleteFromTable('applications', 'DELETE FROM applications WHERE user_id = ?', cleanUserId);
     deleteFromTable(
       'extracted_profiles',

@@ -14,8 +14,16 @@ export const EMAIL_CATEGORIES = [
 
 export type EmailCategory = typeof EMAIL_CATEGORIES[number];
 
+export function getEmailSchemaColumns(): string[] {
+  try {
+    return (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+  } catch {
+    return [];
+  }
+}
+
 // Seed realistic initial recruitment messages if inbox is empty
-export function initializeRecruitmentInbox() {
+export function initializeRecruitmentInbox(userId?: string) {
   const count = db.prepare('SELECT COUNT(*) as c FROM emails').get() as any;
   if (count.c === 0) {
     const seedEmails = [
@@ -51,29 +59,69 @@ export function initializeRecruitmentInbox() {
       }
     ];
 
-    const insert = db.prepare(`
-      INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const hasUserId = getEmailSchemaColumns().includes('user_id');
 
-    db.transaction(() => {
-      for (const e of seedEmails) {
-        insert.run(e.id, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
-      }
-    })();
+    if (hasUserId) {
+      const insert = db.prepare(`
+        INSERT INTO emails (id, user_id, category, sender, recipient, subject, body, is_draft, is_sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      db.transaction(() => {
+        for (const e of seedEmails) {
+          insert.run(e.id, userId || null, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
+        }
+      })();
+    } else {
+      const insert = db.prepare(`
+        INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      db.transaction(() => {
+        for (const e of seedEmails) {
+          insert.run(e.id, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
+        }
+      })();
+    }
   }
 }
 
 initializeRecruitmentInbox();
 
-export function getAllEmails(categoryFilter?: string): RecruitmentEmail[] {
-  let query = 'SELECT * FROM emails';
-  const params: any[] = [];
+/**
+ * Retrieves all recruitment emails scoped to the authenticated user.
+ * Strict fail-closed: Unauthenticated requests or missing userId return an empty list.
+ */
+export function getAllEmails(categoryFilter?: string, userId?: string): RecruitmentEmail[] {
+  if (!userId || typeof userId !== 'string' || !userId.trim()) {
+    return []; // Fail-closed: unauthenticated callers never receive emails
+  }
+  const cleanUserId = userId.trim();
+  const hasUserId = getEmailSchemaColumns().includes('user_id');
+
+  if (hasUserId) {
+    let query = 'SELECT * FROM emails WHERE user_id = ?';
+    const params: any[] = [cleanUserId];
+    if (categoryFilter && categoryFilter !== 'All') {
+      query += ' AND category = ?';
+      params.push(categoryFilter);
+    }
+    query += ' ORDER BY created_at DESC';
+    return db.prepare(query).all(...params) as RecruitmentEmail[];
+  }
+
+  // Pre-migration fallback: resolve exclusively through trusted application ownership.
+  // Never infers ownership from untrusted sender or recipient text headers.
+  let query = `
+    SELECT e.* FROM emails e
+    JOIN applications a ON e.application_id = a.id
+    WHERE a.user_id = ?
+  `;
+  const params: any[] = [cleanUserId];
   if (categoryFilter && categoryFilter !== 'All') {
-    query += ' WHERE category = ?';
+    query += ' AND e.category = ?';
     params.push(categoryFilter);
   }
-  query += ' ORDER BY created_at DESC';
+  query += ' ORDER BY e.created_at DESC';
 
   return db.prepare(query).all(...params) as RecruitmentEmail[];
 }
@@ -81,9 +129,25 @@ export function getAllEmails(categoryFilter?: string): RecruitmentEmail[] {
 export function generateEmailDraft(
   type: 'Reply' | 'Interview_Thank_You' | 'Follow_Up' | 'Networking',
   targetEmail: { sender: string; recipient: string; subject: string; body: string },
-  candidate: FullCandidateProfile
+  candidate: FullCandidateProfile,
+  userId?: string,
+  applicationId?: string | null
 ): RecruitmentEmail {
-  const candidateName = 'Aya Developer';
+  const effectiveUserId = (userId || candidate.profile?.user_id || '').trim();
+  if (!effectiveUserId) {
+    throw new Error('Tenant Ownership Error: A valid userId is required to create an email draft.');
+  }
+
+  // If application_id is provided, verify tenant ownership of that application
+  if (applicationId) {
+    const app = db.prepare('SELECT id, user_id FROM applications WHERE id = ?').get(applicationId) as any;
+    if (!app || app.user_id !== effectiveUserId) {
+      throw new Error('Access Denied: application_id does not belong to the authenticated candidate.');
+    }
+  }
+
+  const candidateName = candidate.profile?.full_name || 'Candidate';
+  const senderEmail = candidate.profile?.email || 'candidate@example.com';
   let draftSubject = '';
   let draftBody = '';
   let category: EmailCategory = 'Followup';
@@ -108,23 +172,43 @@ export function generateEmailDraft(
   }
 
   const draftId = `draft_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  db.prepare(`
-    INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent)
-    VALUES (?, ?, ?, ?, ?, ?, 1, 0)
-  `).run(
-    draftId,
-    category,
-    candidate.profile.user_id ? 'candidate@example.com' : 'candidate@example.com',
-    targetEmail.sender,
-    draftSubject,
-    draftBody
-  );
+  const hasUserId = getEmailSchemaColumns().includes('user_id');
+
+  if (hasUserId) {
+    db.prepare(`
+      INSERT INTO emails (id, user_id, application_id, category, sender, recipient, subject, body, is_draft, is_sent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+    `).run(
+      draftId,
+      effectiveUserId,
+      applicationId || null,
+      category,
+      senderEmail,
+      targetEmail.sender,
+      draftSubject,
+      draftBody
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)
+    `).run(
+      draftId,
+      applicationId || null,
+      category,
+      senderEmail,
+      targetEmail.sender,
+      draftSubject,
+      draftBody
+    );
+  }
 
   logAudit('EMAIL_DRAFT_CREATED', {
     draft_id: draftId,
     recipient: targetEmail.sender,
-    subject: draftSubject
-  });
+    subject: draftSubject,
+    application_id: applicationId || null
+  }, effectiveUserId);
 
   return db.prepare('SELECT * FROM emails WHERE id = ?').get(draftId) as RecruitmentEmail;
 }
@@ -132,15 +216,37 @@ export function generateEmailDraft(
 export function sendEmailWithApproval(
   emailId: string,
   userConfirmed: boolean,
-  userId?: string
+  userId: string
 ): { success: boolean; email: RecruitmentEmail; message: string } {
+  if (!userId || typeof userId !== 'string' || !userId.trim()) {
+    throw new Error('Unauthenticated: A valid userId is required to dispatch an email.');
+  }
+  const cleanUserId = userId.trim();
+
   if (!userConfirmed) {
     throw new Error('Send Security Gate: Explicit user confirmation is required to dispatch an email.');
   }
 
   const email = db.prepare('SELECT * FROM emails WHERE id = ?').get(emailId) as any;
   if (!email) {
-    throw new Error(`Email ${emailId} not found.`);
+    throw new Error('NOT_FOUND: Email not found.');
+  }
+
+  // Tenant boundary verification: verify caller owns this email
+  const hasUserId = getEmailSchemaColumns().includes('user_id');
+  if (hasUserId) {
+    if (!email.user_id || email.user_id !== cleanUserId) {
+      throw new Error('ACCESS_DENIED: Candidate does not own this email record.');
+    }
+  } else {
+    if (email.application_id) {
+      const app = db.prepare('SELECT user_id FROM applications WHERE id = ?').get(email.application_id) as any;
+      if (!app || app.user_id !== cleanUserId) {
+        throw new Error('ACCESS_DENIED: Candidate does not own this email record.');
+      }
+    } else {
+      throw new Error('ACCESS_DENIED: Legacy unowned email record cannot be dispatched.');
+    }
   }
 
   // Step 6 Truthful Delivery Handling:
@@ -152,7 +258,6 @@ export function sendEmailWithApproval(
 
   if (hasLiveCredentials) {
     // Reserved for verified live provider transmission returning provider_message_id
-    // Live integrations are intentionally out of scope for this phase
   }
 
   // Record safely as sandbox_recorded (is_sent = 0, is_draft = 0)
@@ -173,7 +278,7 @@ export function sendEmailWithApproval(
     delivery_status: 'sandbox_recorded',
     is_sent: 0,
     mode: 'Sandbox Simulated Gateway'
-  }, userId);
+  }, cleanUserId);
 
   const updated = db.prepare('SELECT * FROM emails WHERE id = ?').get(emailId) as RecruitmentEmail;
 

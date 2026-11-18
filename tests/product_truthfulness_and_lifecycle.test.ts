@@ -390,11 +390,16 @@ async function runTruthfulnessAndLifecycleTests() {
     console.log('  ✓ Verified system webhook classified as "Employer Confirmation Independently Verified".');
 
     // D. Cross-tenant protection on confirm-receipt endpoint
+    const authModule = await import('../lib/auth');
+    const bobSessionForReceipt = authModule.createSession(userB.id);
     const crossTenantReq = new Request('http://localhost:3000/api/applications/confirm-receipt', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${bobSessionForReceipt.token}`
+      },
       body: JSON.stringify({
-        application_id: submittedPkg.id, // Owned by userA, while route defaults to default user
+        application_id: submittedPkg.id, // Owned by userA, while caller is userB
         confirmation_reference: 'ATTACK-999',
         evidence_type: 'candidate_receipt'
       })
@@ -408,6 +413,7 @@ async function runTruthfulnessAndLifecycleTests() {
 
     // E. Candidate API Route Guard against Spoofing
     const defaultUser = (await import('../lib/db')).getOrCreateDefaultUser();
+    const defaultSession = authModule.createSession(defaultUser.id);
     const defaultAppId = 'app_default_user_receipt_test';
     db.prepare(`
       INSERT INTO applications (
@@ -417,7 +423,10 @@ async function runTruthfulnessAndLifecycleTests() {
 
     const spoofReq = new Request('http://localhost:3000/api/applications/confirm-receipt', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${defaultSession.token}`
+      },
       body: JSON.stringify({
         application_id: defaultAppId,
         confirmation_reference: 'SPOOF-WEBHOOK-999',
@@ -732,10 +741,17 @@ async function runTruthfulnessAndLifecycleTests() {
       ) VALUES (?, ?, ?, 'Ready for Candidate Submission', 95, '{}', 1, 0, 'Manual')
     `).run(apiTestAppId, userA.id, job1.id);
 
+    const { createSession } = await import('../lib/auth');
+    const aliceSession = createSession(userA.id);
+    const aliceToken = aliceSession.token;
+
     // 11.1: Missing candidate_confirmed returns HTTP 400
     const missingReq = new Request('http://localhost:3000/api/applications/submit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aliceToken}`
+      },
       body: JSON.stringify({ application_id: apiTestAppId })
     });
     const missingRes = await candidateSubmitHandler(missingReq);
@@ -751,7 +767,10 @@ async function runTruthfulnessAndLifecycleTests() {
     // 11.2: Non-boolean candidate_confirmed ("true" string, 1 number) returns HTTP 400
     const nonBoolReq = new Request('http://localhost:3000/api/applications/submit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aliceToken}`
+      },
       body: JSON.stringify({ application_id: apiTestAppId, candidate_confirmed: 'true' })
     });
     const nonBoolRes = await candidateSubmitHandler(nonBoolReq);
@@ -762,7 +781,6 @@ async function runTruthfulnessAndLifecycleTests() {
 
     // 11.3: Cross-tenant submission: Bob attempting to submit Alice's application
     // Create authentic session token for Bob
-    const { createSession } = await import('../lib/auth');
     const bobSession = createSession(userB.id);
     const bobToken = bobSession.token;
 
@@ -785,8 +803,6 @@ async function runTruthfulnessAndLifecycleTests() {
     console.log('  ✓ Cross-tenant candidate submission strictly blocked with HTTP 403 (Access Denied).');
 
     // 11.4: Authentic submission by owner (Alice) returns HTTP 200 and logs audit provenance
-    const aliceSession = createSession(userA.id);
-    const aliceToken = aliceSession.token;
 
     const validReq = new Request('http://localhost:3000/api/applications/submit', {
       method: 'POST',
@@ -845,9 +861,9 @@ async function runTruthfulnessAndLifecycleTests() {
     // Draft email creation
     const draftEmailId = 'email_truth_test_01';
     db.prepare(`
-      INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent, delivery_status)
-      VALUES (?, 'Follow_Up', 'candidate@example.com', 'recruiter@klarna.com', 'Application Follow-up', 'Thank you for considering my application.', 1, 0, 'draft')
-    `).run(draftEmailId);
+      INSERT INTO emails (id, user_id, category, sender, recipient, subject, body, is_draft, is_sent, delivery_status)
+      VALUES (?, ?, 'Follow_Up', 'candidate@example.com', 'recruiter@klarna.com', 'Application Follow-up', 'Thank you for considering my application.', 1, 0, 'draft')
+    `).run(draftEmailId, userA.id);
 
     const initialEmail = db.prepare('SELECT is_draft, is_sent, delivery_status FROM emails WHERE id = ?').get(draftEmailId) as any;
     if (initialEmail.is_draft !== 1 || initialEmail.is_sent !== 0 || initialEmail.delivery_status !== 'draft') {

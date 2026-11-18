@@ -265,7 +265,7 @@ export const recruiterCommunicationAgent: AgentContract<{ emailSubject: string; 
       recipient: candidate.profile.email || 'candidate@example.com',
       subject: emailSubject,
       body: emailBody
-    }, candidate);
+    }, candidate, userId || candidate.profile.user_id);
     logAudit('AGENT_RECRUITER_REPLY_DRAFTED', { subject: reply.subject }, userId);
     return reply;
   }

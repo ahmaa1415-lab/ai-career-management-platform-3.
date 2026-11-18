@@ -176,18 +176,33 @@ export function autoProvisionCompanyPortalAccount(
 
   // Send internal candidate tracking guide to candidate inbox (NEVER impersonating employer talent acquisition)
   const emailId = `email_cpa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  
-  db.prepare(`
-    INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-    VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
-  `).run(
-    emailId,
-    applicationId || null,
-    'Career Platform Portal Assistant <portal-assistant@career-platform.local>',
-    accountEmail,
-    `[Candidate Tracking Guide] Application Preparation for ${job.employer} - ${job.title}`,
-    `[INTERNAL PLATFORM DEMO/TRACKING RECORD - NOT SENT BY EMPLOYER]\n\nDear Candidate,\n\nYour application package for ${job.title} at ${job.employer} is prepared in your Application Center.\n\n- Official Portal URL: ${portalUrl}\n- Portal Platform: ${portalPlatform}\n- Internal Tracking Reference: ${internalTrackingReference}\n- Recommended Action: Open the official employer portal link, sign in or register with your email (${accountEmail}), and submit your tailored CV and cover letter.\n\nImportant Note: This is an internal candidate workflow record. No external submission has been made to ${job.employer}. Once you complete your application on their portal, please confirm submission in your Application Workspace.\n\nCareer Management Platform`
-  );
+  const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+  if (emailCols.includes('user_id')) {
+    db.prepare(`
+      INSERT INTO emails (id, user_id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+      VALUES (?, ?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
+    `).run(
+      emailId,
+      userId,
+      applicationId || null,
+      'Career Platform Portal Assistant <portal-assistant@career-platform.local>',
+      accountEmail,
+      `[Candidate Tracking Guide] Application Preparation for ${job.employer} - ${job.title}`,
+      `[INTERNAL PLATFORM DEMO/TRACKING RECORD - NOT SENT BY EMPLOYER]\n\nDear Candidate,\n\nYour application package for ${job.title} at ${job.employer} is prepared in your Application Center.\n\n- Official Portal URL: ${portalUrl}\n- Portal Platform: ${portalPlatform}\n- Internal Tracking Reference: ${internalTrackingReference}\n- Recommended Action: Open the official employer portal link, sign in or register with your email (${accountEmail}), and submit your tailored CV and cover letter.\n\nImportant Note: This is an internal candidate workflow record. No external submission has been made to ${job.employer}. Once you complete your application on their portal, please confirm submission in your Application Workspace.\n\nCareer Management Platform`
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+      VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 0, 1, CURRENT_TIMESTAMP)
+    `).run(
+      emailId,
+      applicationId || null,
+      'Career Platform Portal Assistant <portal-assistant@career-platform.local>',
+      accountEmail,
+      `[Candidate Tracking Guide] Application Preparation for ${job.employer} - ${job.title}`,
+      `[INTERNAL PLATFORM DEMO/TRACKING RECORD - NOT SENT BY EMPLOYER]\n\nDear Candidate,\n\nYour application package for ${job.title} at ${job.employer} is prepared in your Application Center.\n\n- Official Portal URL: ${portalUrl}\n- Portal Platform: ${portalPlatform}\n- Internal Tracking Reference: ${internalTrackingReference}\n- Recommended Action: Open the official employer portal link, sign in or register with your email (${accountEmail}), and submit your tailored CV and cover letter.\n\nImportant Note: This is an internal candidate workflow record. No external submission has been made to ${job.employer}. Once you complete your application on their portal, please confirm submission in your Application Workspace.\n\nCareer Management Platform`
+    );
+  }
 
   logAudit('COMPANY_PORTAL_TRACKER_INITIALIZED', {
     account_id: accountId,

@@ -46,7 +46,7 @@ export function generateDailyExecutiveReport(userId?: string): DailyReportRecord
   const allJobs = getAllVerifiedJobs();
   const top10 = candidate ? rankTopOpportunities(candidate, allJobs) : [];
   const allApps = getAllApplications(user.id);
-  const allEmails = getAllEmails();
+  const allEmails = getAllEmails(undefined, user.id);
 
   // Canonical unified metrics computation
   const kpis = calculateApplicationKPIs(allApps);

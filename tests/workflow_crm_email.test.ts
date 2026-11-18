@@ -78,14 +78,20 @@ try {
 
   // 7. Test Recruitment Email Inbox & Drafting
   console.log('7. Testing Recruitment Email Inbox...');
-  const emails = getAllEmails();
+  const testEmailId = `email_workflow_test_${Date.now()}`;
+  db.prepare(`
+    INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent)
+    VALUES (?, ?, 'Interview', 'recruiter@gitlab.com', 'candidate@example.com', 'Interview Invitation', 'We would love to interview you.', 0, 0)
+  `).run(testEmailId, app.id);
+
+  const emails = getAllEmails(undefined, user.id);
   console.log(`✓ Inbox contains ${emails.length} categorized messages.`);
   if (emails.length === 0) {
     throw new Error('Recruitment inbox is empty!');
   }
 
   const sampleEmail = emails[0];
-  const draft = generateEmailDraft('Reply', sampleEmail, candidate);
+  const draft = generateEmailDraft('Reply', sampleEmail, candidate, user.id, app.id);
   console.log(`✓ Generated email draft (ID: ${draft.id}), is_draft: ${draft.is_draft}, subject: ${draft.subject}`);
 
   // Test send email security gate (attempting to send without user confirmation)

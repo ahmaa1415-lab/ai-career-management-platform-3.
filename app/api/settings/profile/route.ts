@@ -1,18 +1,14 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import db, { logAudit } from '@/lib/db';
-import { validateSessionToken, validateEmailFormat } from '@/lib/auth';
+import { getAuthenticatedUser, validateEmailFormat } from '@/lib/auth';
 
 export async function GET(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('career_session');
-    let userId = 'user_default_01';
-
-    if (sessionCookie?.value) {
-      const user = validateSessionToken(sessionCookie.value);
-      if (user) userId = user.id;
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
     }
+    const userId = authUser.id;
 
     const user = db.prepare('SELECT id, email, full_name, role, is_verified, profile_image, timezone, language FROM users WHERE id = ?').get(userId);
     return NextResponse.json({ success: true, user });
@@ -23,14 +19,11 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('career_session');
-    let userId = 'user_default_01';
-
-    if (sessionCookie?.value) {
-      const user = validateSessionToken(sessionCookie.value);
-      if (user) userId = user.id;
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
     }
+    const userId = authUser.id;
 
     const body = await req.json();
     const { fullName, email, timezone, language, profileImage } = body;

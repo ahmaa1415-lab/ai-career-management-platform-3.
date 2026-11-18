@@ -1,18 +1,15 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import db, { logAudit } from '@/lib/db';
-import { validateSessionToken, getUserActiveSessions, invalidateAllUserSessions } from '@/lib/auth';
+import { getAuthenticatedUser, getUserActiveSessions, invalidateAllUserSessions } from '@/lib/auth';
 
 export async function GET(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('career_session');
-    let userId = 'user_default_01';
-
-    if (sessionCookie?.value) {
-      const user = validateSessionToken(sessionCookie.value);
-      if (user) userId = user.id;
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
     }
+    const userId = authUser.id;
 
     const sessions = getUserActiveSessions(userId);
     return NextResponse.json({ success: true, sessions });
@@ -23,14 +20,11 @@ export async function GET(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('career_session');
-    let userId = 'user_default_01';
-
-    if (sessionCookie?.value) {
-      const user = validateSessionToken(sessionCookie.value);
-      if (user) userId = user.id;
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
     }
+    const userId = authUser.id;
 
     const { searchParams } = new URL(req.url);
     const targetId = searchParams.get('id');
@@ -39,6 +33,7 @@ export async function DELETE(req: Request) {
     if (all) {
       const count = invalidateAllUserSessions(userId);
       // Clear cookie
+      const cookieStore = await cookies();
       cookieStore.set('career_session', '', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -50,7 +45,10 @@ export async function DELETE(req: Request) {
     }
 
     if (targetId) {
-      db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(targetId, userId);
+      const res = db.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?').run(targetId, userId);
+      if (res.changes === 0) {
+        return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+      }
       logAudit('SESSION_REVOKED', { sessionId: targetId }, userId);
       return NextResponse.json({ success: true, message: 'Session terminated.' });
     }

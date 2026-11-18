@@ -248,17 +248,34 @@ export function runAutonomousApplyEverywhere(
 
         // Record draft email in candidate mailbox (is_draft = 1, is_sent = 0)
         const emailId = `email_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        db.prepare(`
-          INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-          VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
-        `).run(
-          emailId,
-          appId,
-          candidate.profile?.email || 'candidate@example.com',
-          `${job.employer} Talent Acquisition`,
-          `[Draft Application] ${job.title} - ${candidate.profile?.full_name || 'Candidate'}`,
-          tailoredPkg.cover_letter
-        );
+        const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+        const ownerUserId = candidate.profile?.user_id || user.id;
+        if (emailCols.includes('user_id')) {
+          db.prepare(`
+            INSERT INTO emails (id, user_id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+            VALUES (?, ?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
+          `).run(
+            emailId,
+            ownerUserId,
+            appId,
+            candidate.profile?.email || 'candidate@example.com',
+            `${job.employer} Talent Acquisition`,
+            `[Draft Application] ${job.title} - ${candidate.profile?.full_name || 'Candidate'}`,
+            tailoredPkg.cover_letter
+          );
+        } else {
+          db.prepare(`
+            INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+            VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
+          `).run(
+            emailId,
+            appId,
+            candidate.profile?.email || 'candidate@example.com',
+            `${job.employer} Talent Acquisition`,
+            `[Draft Application] ${job.title} - ${candidate.profile?.full_name || 'Candidate'}`,
+            tailoredPkg.cover_letter
+          );
+        }
 
         newlyApplied++;
 

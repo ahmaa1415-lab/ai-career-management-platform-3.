@@ -30,12 +30,25 @@ export async function GET(req: Request) {
       LIMIT 15
     `).all(user.id) as any[];
 
-    // 3. Fetch recruiter emails
-    const emails = db.prepare(`
-      SELECT * FROM emails
-      ORDER BY created_at DESC
-      LIMIT 10
-    `).all() as any[];
+    // 3. Fetch recruiter emails scoped to tenant
+    const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+    let emails: any[] = [];
+    if (emailCols.includes('user_id')) {
+      emails = db.prepare(`
+        SELECT * FROM emails
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 10
+      `).all(user.id) as any[];
+    } else {
+      emails = db.prepare(`
+        SELECT e.* FROM emails e
+        JOIN applications a ON e.application_id = a.id
+        WHERE a.user_id = ?
+        ORDER BY e.created_at DESC
+        LIMIT 10
+      `).all(user.id) as any[];
+    }
 
     const notifications = [
       ...apps.map(a => {

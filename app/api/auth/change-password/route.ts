@@ -1,22 +1,18 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { validateSessionToken, changeUserPassword } from '@/lib/auth';
+import db from '@/lib/db';
+import { getAuthenticatedUser, changeUserPassword, hashToken } from '@/lib/auth';
 
 export async function POST(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('career_session');
-    let userId = 'user_default_01';
-
-    if (sessionCookie?.value) {
-      const user = validateSessionToken(sessionCookie.value);
-      if (user) {
-        userId = user.id;
-      }
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
     }
+    const userId = authUser.id;
 
     const body = await req.json();
-    const { currentPassword, newPassword, confirmPassword } = body;
+    const { currentPassword, newPassword, confirmPassword, revokeOtherSessions } = body;
 
     if (!currentPassword || !newPassword || !confirmPassword) {
       return NextResponse.json(
@@ -35,6 +31,18 @@ export async function POST(req: Request) {
     const result = changeUserPassword(userId, currentPassword, newPassword);
     if (!result.success) {
       return NextResponse.json({ error: result.error || 'Failed to change password.' }, { status: 400 });
+    }
+
+    // Security enhancement: Revoke other active sessions to fence compromised tokens
+    try {
+      const cookieStore = await cookies();
+      const currentToken = cookieStore.get('career_session')?.value;
+      if (currentToken) {
+        const currentHash = hashToken(currentToken);
+        db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(userId, currentHash);
+      }
+    } catch {
+      // In case session revocation check encounters an issue, password update has already completed safely
     }
 
     return NextResponse.json({

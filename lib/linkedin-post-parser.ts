@@ -356,17 +356,33 @@ Best regards,
 ${candName}  
 ${candEmail}${candidateProfile.profile.linkedin_url ? `\nLinkedIn: ${candidateProfile.profile.linkedin_url}` : ''}`;
 
-  db.prepare(`
-    INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-    VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, NULL)
-  `).run(
-    emailId,
-    appId,
-    candEmail,
-    recruiterEmail,
-    emailSubject,
-    emailBody
-  );
+  const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+  if (emailCols.includes('user_id')) {
+    db.prepare(`
+      INSERT INTO emails (id, user_id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+      VALUES (?, ?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, NULL)
+    `).run(
+      emailId,
+      candidateProfile.profile.user_id,
+      appId,
+      candEmail,
+      recruiterEmail,
+      emailSubject,
+      emailBody
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+      VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, NULL)
+    `).run(
+      emailId,
+      appId,
+      candEmail,
+      recruiterEmail,
+      emailSubject,
+      emailBody
+    );
+  }
 
   logAudit('LINKEDIN_POST_PACKAGE_PREPARED', {
     application_id: appId,

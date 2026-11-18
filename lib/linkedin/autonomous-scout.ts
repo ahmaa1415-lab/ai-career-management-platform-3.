@@ -566,10 +566,18 @@ ${candEmail} | ${candPhone}
 LinkedIn: ${candLinkedIn}`;
 
     const emailId = `email_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    db.prepare(`
-      INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
-      VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
-    `).run(emailId, appId, candEmail, role.target_contact, emailSubject, emailBody);
+    const emailCols = (db.prepare('PRAGMA table_info(emails)').all() as any[]).map((c: any) => c.name);
+    if (emailCols.includes('user_id')) {
+      db.prepare(`
+        INSERT INTO emails (id, user_id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+        VALUES (?, ?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
+      `).run(emailId, userId, appId, candEmail, role.target_contact, emailSubject, emailBody);
+    } else {
+      db.prepare(`
+        INSERT INTO emails (id, application_id, category, sender, recipient, subject, body, is_draft, is_sent, sent_at)
+        VALUES (?, ?, 'Opportunity', ?, ?, ?, ?, 1, 0, null)
+      `).run(emailId, appId, candEmail, role.target_contact, emailSubject, emailBody);
+    }
 
     channelDetails = {
       email_to: role.target_contact,
