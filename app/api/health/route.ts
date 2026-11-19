@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/db';
+import { isMaintenanceActive } from '@/lib/maintenance';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -16,9 +17,12 @@ export async function GET() {
       ? 'staging'
       : (process.env.NODE_ENV || 'production');
 
+    const maintenance = isMaintenanceActive();
+
     return NextResponse.json({
       status: 'healthy',
       environment: envLabel,
+      maintenance,
       timestamp: new Date().toISOString(),
       version: '1.0.0'
     }, {

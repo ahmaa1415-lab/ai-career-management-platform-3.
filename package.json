@@ -5,7 +5,11 @@
   "main": "index.js",
   "scripts": {
     "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
-    "build": "next build",
+    "build": "npm run build:migration && node scripts/verify_migration_bundle.mjs && next build",
+    "build:migration": "node node_modules/esbuild/bin/esbuild scripts/run_email_migration.ts --bundle --platform=node --format=esm --packages=external --outfile=scripts/run_email_migration.mjs",
+    "verify:migration": "node scripts/verify_migration_bundle.mjs",
+    "migrate:email": "node scripts/run_email_migration.mjs",
+    "maintenance": "node scripts/maintenance_control.mjs",
     "start": "node scripts/start_all.mjs",
     "start:web": "next start",
     "worker": "node scripts/background_worker.mjs",

@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 
 const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'career_app.db');
@@ -26,6 +27,36 @@ export class BackgroundWorkerManager {
 
   acquireLock(jobName, leaseDurationMs = 300000, overrideWorkerId = null) {
     const activeWorkerId = overrideWorkerId || workerId;
+    const dbDir = path.dirname(this.db.name);
+    const coordinationDbPath = path.join(dbDir, '.coordination.db');
+
+    // 1. Cross-process coordination safeguard: check .coordination.db and .maintenance_lock
+    try {
+      if (process.env.MAINTENANCE_MODE === 'true') {
+        console.log(`[WORKER_LOCK] Maintenance mode active. Refusing lock acquisition for "${jobName}".`);
+        return false;
+      }
+
+      if (fs.existsSync(coordinationDbPath)) {
+        const cdb = new Database(coordinationDbPath, { timeout: 3000 });
+        const row = cdb.prepare("SELECT state FROM coordination_state WHERE id = 'global'").get();
+        cdb.close();
+        if (row && (row.state === 'DRAINING' || row.state === 'ACTIVE')) {
+          console.log(`[WORKER_LOCK] Cross-process maintenance state is ${row.state}. Refusing lock for "${jobName}".`);
+          return false;
+        }
+      }
+
+      const lockPath = path.join(dbDir, '.maintenance_lock');
+      if (fs.existsSync(lockPath)) {
+        console.log(`[WORKER_LOCK] Maintenance lockfile present. Refusing lock acquisition for "${jobName}".`);
+        return false;
+      }
+    } catch (err) {
+      console.error('[WORKER_LOCK] Failed to inspect maintenance state. Failing closed:', err.message);
+      return false;
+    }
+
     const now = new Date();
     const expiresAt = new Date(now.getTime() + leaseDurationMs);
 
@@ -53,7 +84,19 @@ export class BackgroundWorkerManager {
     });
 
     try {
-      return tryAcquire();
+      const acquired = tryAcquire();
+      if (acquired && fs.existsSync(coordinationDbPath)) {
+        try {
+          const cdb = new Database(coordinationDbPath, { timeout: 3000 });
+          cdb.prepare(`
+            INSERT INTO active_leases (lease_id, process_type, pid, label, acquired_at, expires_at)
+            VALUES (?, 'worker', ?, ?, ?, ?)
+            ON CONFLICT(lease_id) DO UPDATE SET expires_at = excluded.expires_at
+          `).run(`worker_${activeWorkerId}_${jobName}`, process.pid, jobName, now.getTime(), expiresAt.getTime());
+          cdb.close();
+        } catch {}
+      }
+      return acquired;
     } catch (err) {
       console.error(`[WORKER_LOCK] Failed to acquire lock for ${jobName}:`, err);
       return false;
@@ -62,10 +105,21 @@ export class BackgroundWorkerManager {
 
   releaseLock(jobName, overrideWorkerId = null) {
     const activeWorkerId = overrideWorkerId || workerId;
+    const dbDir = path.dirname(this.db.name);
+    const coordinationDbPath = path.join(dbDir, '.coordination.db');
+
     try {
       this.db.prepare('DELETE FROM worker_leases WHERE job_name = ? AND locked_by = ?').run(jobName, activeWorkerId);
     } catch (err) {
       console.error(`[WORKER_LOCK] Failed to release lock for ${jobName}:`, err);
+    }
+
+    if (fs.existsSync(coordinationDbPath)) {
+      try {
+        const cdb = new Database(coordinationDbPath, { timeout: 3000 });
+        cdb.prepare('DELETE FROM active_leases WHERE lease_id = ?').run(`worker_${activeWorkerId}_${jobName}`);
+        cdb.close();
+      } catch {}
     }
   }
 

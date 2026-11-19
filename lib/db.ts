@@ -20,9 +20,103 @@ if (!globalForDb._careerAppDb) {
   globalForDb._careerAppDb = db;
 }
 
+// Driver-level write barrier: protect all mutating statements against maintenance mode and track cross-process in-flight writes
+import { acquireCrossProcessWriteLease } from './coordination';
+const originalPrepare = db.prepare.bind(db);
+(db as any).prepare = function (source: string) {
+  const statement = originalPrepare(source);
+
+  // Native SQLite engine classification via sqlite3_stmt_readonly
+  if (!statement.readonly) {
+    const originalRun = statement.run.bind(statement);
+    statement.run = function (...params: any[]) {
+      const lease = acquireCrossProcessWriteLease({
+        processType: 'web',
+        label: source.trim().substring(0, 40)
+      });
+      try {
+        return originalRun(...params);
+      } finally {
+        lease.release();
+      }
+    };
+
+    const originalGet = statement.get.bind(statement);
+    statement.get = function (...params: any[]) {
+      const lease = acquireCrossProcessWriteLease({
+        processType: 'web',
+        label: source.trim().substring(0, 40)
+      });
+      try {
+        return originalGet(...params);
+      } finally {
+        lease.release();
+      }
+    };
+
+    const originalAll = statement.all.bind(statement);
+    statement.all = function (...params: any[]) {
+      const lease = acquireCrossProcessWriteLease({
+        processType: 'web',
+        label: source.trim().substring(0, 40)
+      });
+      try {
+        return originalAll(...params);
+      } finally {
+        lease.release();
+      }
+    };
+
+    const originalIterate = statement.iterate.bind(statement);
+    statement.iterate = function (...params: any[]) {
+      const lease = acquireCrossProcessWriteLease({
+        processType: 'web',
+        label: source.trim().substring(0, 40)
+      });
+      try {
+        return originalIterate(...params);
+      } finally {
+        lease.release();
+      }
+    };
+  }
+
+  return statement;
+};
+
+const originalExec = db.exec.bind(db);
+(db as any).exec = function (source: string) {
+  const lease = acquireCrossProcessWriteLease({
+    processType: 'web',
+    label: source.trim().substring(0, 40)
+  });
+  try {
+    return originalExec(source);
+  } finally {
+    lease.release();
+  }
+};
+
+const originalTransaction = db.transaction.bind(db);
+(db as any).transaction = function (fn: any) {
+  const wrappedTx = originalTransaction((...args: any[]) => {
+    const lease = acquireCrossProcessWriteLease({
+      processType: 'web',
+      label: 'db.transaction'
+    });
+    try {
+      return fn(...args);
+    } finally {
+      lease.release();
+    }
+  });
+  return wrappedTx;
+};
+
 // Schema initialization
 export function initializeSchema() {
-  db.exec(`
+  try {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
@@ -524,6 +618,13 @@ export function initializeSchema() {
       CREATE INDEX IF NOT EXISTS idx_emails_user_category ON emails(user_id, category);
     `);
   } catch {}
+  } catch (err: any) {
+    if (err?.code === 'MAINTENANCE_MODE_ACTIVE') {
+      // Cleanly skip schema initialization when maintenance mode is active at startup
+      return;
+    }
+    throw err;
+  }
 }
 
 // Automatically initialize schema on first import

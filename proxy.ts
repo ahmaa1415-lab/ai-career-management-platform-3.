@@ -1,65 +1,38 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { isMaintenanceActive, createMaintenanceResponse } from './lib/maintenance';
 
-// Protected application routes
-const PROTECTED_ROUTES = [
-  '/control-center',
-  '/profile',
-  '/resumes',
-  '/ats-analyzer',
-  '/job-intelligence',
-  '/linkedin',
-  '/crm',
-  '/inbox',
-  '/reports',
-  '/settings',
-  '/integrations',
-  '/discovery',
-  '/top-opportunities',
-  '/applications',
-  '/approvals',
-  '/interview-prep',
-  '/cover-letter',
-  '/audit-log'
-];
+/**
+ * Next.js 16 Proxy Convention (formerly Middleware)
+ *
+ * Intercepts incoming requests before route handlers execute.
+ * When maintenance mode is active:
+ * - All mutating HTTP methods (POST, PUT, PATCH, DELETE) are intercepted and rejected with HTTP 503.
+ * - Safe read-only methods (GET, HEAD, OPTIONS) are permitted through to allow health probes,
+ *   monitoring, and static frontend assets.
+ */
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
-  const sessionCookie = request.cookies.get('career_session');
+  const method = request.method.toUpperCase();
 
-  // Check if accessing a protected route
-  const isProtectedRoute = PROTECTED_ROUTES.some((route) =>
-    pathname === route || pathname.startsWith(`${route}/`)
-  );
-
-  if (isProtectedRoute) {
-    if (!sessionCookie?.value) {
-      const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
-      return NextResponse.redirect(loginUrl);
+  // If request is mutating, evaluate maintenance lock state
+  if (MUTATING_METHODS.has(method)) {
+    if (isMaintenanceActive()) {
+      return createMaintenanceResponse();
     }
-  }
-
-  // If authenticated user visits /login or /register, redirect to /control-center
-  if ((pathname === '/login' || pathname === '/register') && sessionCookie?.value) {
-    const destination = request.nextUrl.searchParams.get('redirect') || '/control-center';
-    return NextResponse.redirect(new URL(destination, request.url));
   }
 
   return NextResponse.next();
 }
 
-export default proxy;
-
+/**
+ * Matcher configuration:
+ * Targets API routes while excluding static Next.js assets, public images, and favicons.
+ */
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for:
-     * - api routes
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico, sitemap.xml, robots.txt
-     */
-    '/((?!api|_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)',
+    '/api/:path*',
   ],
 };

@@ -56,7 +56,10 @@ export function ensureMigrationTrackingTable(db: Database.Database): void {
  * 5. Executes migration inside the atomic EXCLUSIVE transaction.
  * 6. Guarantees complete rollback on any failure, allowing clean retries.
  */
-export function runEmailUserIdMigration(db: Database.Database): MigrationResult {
+export function runEmailUserIdMigration(
+  db: Database.Database,
+  options?: { expectedDataVersion?: number }
+): MigrationResult {
   // Ensure foreign keys are enabled
   db.pragma('foreign_keys = ON');
 
@@ -88,6 +91,16 @@ export function runEmailUserIdMigration(db: Database.Database): MigrationResult 
   try {
     // Acquire EXCLUSIVE lock immediately to serialize all concurrent runners
     db.exec('BEGIN EXCLUSIVE TRANSACTION;');
+
+    // Step 0.5: Invariant verification - assert that data_version has not changed since pre-migration backup
+    if (options?.expectedDataVersion !== undefined) {
+      const versionInsideLock = db.pragma('data_version', { simple: true }) as number;
+      if (versionInsideLock !== options.expectedDataVersion) {
+        throw new Error(
+          `DATA_VERSION_DIVERGENCE: Database modified by an uncoordinated writer between pre-migration backup (data_version=${options.expectedDataVersion}) and lock acquisition (data_version=${versionInsideLock}). Aborting migration.`
+        );
+      }
+    }
 
     // Step 1: Ensure tracking table exists inside the exclusive transaction
     ensureMigrationTrackingTable(db);
