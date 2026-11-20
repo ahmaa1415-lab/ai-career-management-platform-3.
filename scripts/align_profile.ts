@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 
 export function alignProfile() {
-  const db = new Database('./data/career_app.db');
+  const dbPath = process.env.DATABASE_PATH || './data/career_app.db';
+  const db = new Database(dbPath);
 
   const skills = JSON.stringify([
     'Category Management', 'Personal Care & FMCG', 'Beauty & Cosmetics',

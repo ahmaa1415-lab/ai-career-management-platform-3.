@@ -24,7 +24,8 @@ import {
   spoolDurableAuditEvent,
   flushDurableAudits,
   getPendingAuditCount,
-  getCoordinationDbPath
+  getCoordinationDbPath,
+  getCoordinationDb
 } from './coordination';
 
 export type {
@@ -36,7 +37,6 @@ export {
   COORDINATION_DB_FILENAME,
   MAINTENANCE_LOCK_FILENAME,
   SUPERVISOR_STATUS_FILENAME,
-  MaintenanceLockData,
   MaintenanceActiveError,
   MaintenanceDrainTimeoutError,
   getCrossProcessState,

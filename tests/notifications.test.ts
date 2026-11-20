@@ -1,6 +1,8 @@
+import assert from 'assert';
 import { getOrCreateDefaultUser } from '../lib/db';
 import db from '../lib/db';
 import { GET as getNotifications } from '../app/api/notifications/route';
+import { getTestAuthContext, createExpiredTestSession } from './helpers/testAuth';
 
 async function testNotifications() {
   console.log('--- RUNNING NOTIF-01: Notifications & Activity Stream Test ---');
@@ -15,24 +17,27 @@ async function testNotifications() {
   console.log(`✓ Total recruitment emails indexed: ${emails.count}`);
 
   if (logs.count === 0 && apps.count === 0) {
-    throw new Error('No activity available for notification stream');
+    // Seed at least one audit event so notifications stream is populated
+    db.prepare(`
+      INSERT INTO audit_logs (id, user_id, action, details, timestamp)
+      VALUES (?, ?, 'TEST_INITIALIZED', '{"seeded": true}', datetime('now'))
+    `).run(`audit_init_${Date.now()}`, user.id);
   }
 
-  // Regression Verification for Notifications API Route Handler (Read-Only)
-  console.log('\n--- RUNNING NOTIF-02: Notifications Route Handler Regression Test ---');
-  const req = new Request('http://localhost:3000/api/notifications', { method: 'GET' });
+  // Positive Test: Authenticated candidate request
+  console.log('\n--- RUNNING NOTIF-02: Authenticated Notifications Route Handler ---');
+  const authContext = getTestAuthContext(user.id);
+  const req = new Request('http://localhost:3000/api/notifications', {
+    method: 'GET',
+    headers: { 'Cookie': authContext.cookieHeader }
+  });
   const res = await getNotifications(req);
 
-  if (res.status !== 200) {
-    const errorBody = await res.json();
-    throw new Error(`Notifications API returned status ${res.status}: ${JSON.stringify(errorBody)}`);
-  }
+  assert.strictEqual(res.status, 200, `Authenticated request must return HTTP 200, got ${res.status}`);
 
   const data = await res.json();
-  if (!data.success || !Array.isArray(data.notifications)) {
-    throw new Error('Notifications response format is invalid or missing notifications array.');
-  }
-
+  assert.ok(data.success, 'Response must indicate success');
+  assert.ok(Array.isArray(data.notifications), 'Response must contain notifications array');
   console.log(`✓ Route handler returned HTTP 200 with ${data.notifications.length} notifications.`);
 
   // Verify ordering: Newest first
@@ -47,22 +52,39 @@ async function testNotifications() {
     console.log('✓ Verified: Notifications are strictly sorted newest-first.');
   }
 
-  // Verify non-authenticated / fallback behavior is graceful without writes
-  const authReq = new Request('http://localhost:3000/api/notifications', {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer unauthenticated_test_token` }
-  });
-  const fallbackRes = await getNotifications(authReq);
-  if (fallbackRes.status !== 200) {
-    throw new Error(`Fallback notifications query returned status ${fallbackRes.status}`);
-  }
-  const fallbackData = await fallbackRes.json();
-  if (!fallbackData.success || !Array.isArray(fallbackData.notifications)) {
-    throw new Error('Fallback notifications test failed format validation.');
-  }
-  console.log(`✓ Fallback state successfully handled (Status: 200, count: ${fallbackData.notifications.length}).`);
+  // Negative Test 1: Unauthenticated request must return HTTP 401
+  console.log('\n--- RUNNING NOTIF-03: Security Invariant: Unauthenticated Access Rejected ---');
+  const unauthReq = new Request('http://localhost:3000/api/notifications', { method: 'GET' });
+  const unauthRes = await getNotifications(unauthReq);
+  assert.strictEqual(unauthRes.status, 401, `Unauthenticated request must be rejected with HTTP 401, got ${unauthRes.status}`);
+  console.log('✓ Unauthenticated request rejected with HTTP 401.');
 
-  console.log('\n>>> NOTIF-01 & NOTIF-02 PASSED SUCCESSFULLY <<<');
+  // Negative Test 2: Expired or forged session must return HTTP 401
+  console.log('\n--- RUNNING NOTIF-04: Security Invariant: Expired Session Rejected ---');
+  const expiredToken = createExpiredTestSession(user.id);
+  const expiredReq = new Request('http://localhost:3000/api/notifications', {
+    method: 'GET',
+    headers: { 'Cookie': `career_session=${expiredToken}` }
+  });
+  const expiredRes = await getNotifications(expiredReq);
+  assert.strictEqual(expiredRes.status, 401, `Expired session must be rejected with HTTP 401, got ${expiredRes.status}`);
+  console.log('✓ Expired session rejected with HTTP 401.');
+
+  // Multi-tenant Isolation Test: User B cannot access User A's notifications
+  console.log('\n--- RUNNING NOTIF-05: Multi-Tenant Scoping Isolation ---');
+  const userBContext = getTestAuthContext('user_tenant_b_isolated');
+  const userBReq = new Request('http://localhost:3000/api/notifications', {
+    method: 'GET',
+    headers: { 'Cookie': userBContext.cookieHeader }
+  });
+  const userBRes = await getNotifications(userBReq);
+  assert.strictEqual(userBRes.status, 200);
+  const userBData = await userBRes.json();
+  const leakedLogs = userBData.notifications.filter((n: any) => n.user_id && n.user_id !== 'user_tenant_b_isolated');
+  assert.strictEqual(leakedLogs.length, 0, 'User B must not see any notifications belonging to User A');
+  console.log(`✓ Multi-tenant isolation verified: User B sees ${userBData.notifications.length} scoped notifications, 0 cross-tenant leaks.`);
+
+  console.log('\n>>> NOTIF-01 THROUGH NOTIF-05 PASSED SUCCESSFULLY WITH 0 DEFECTS <<<');
 }
 
 testNotifications().catch(e => {

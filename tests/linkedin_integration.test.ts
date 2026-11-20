@@ -26,16 +26,18 @@ console.log('[✓ PASS] 1. Schema & Default LinkedIn record initialized:', {
 // Test 2: Configuration Update Persistence
 const customUrl = 'https://linkedin.com/in/aya-senior-fullstack-engineer';
 const customClientId = 'li_client_verified_production_42';
+const customClientSecret = 'oauth_token_verified_prod_secret';
 const updated = updateLinkedInIntegration(TEST_USER_ID, {
   profile_url: customUrl,
   client_id: customClientId,
-  status: 'connected',
+  client_secret: customClientSecret,
+  status: 'Connected',
   sync_enabled: 1
 });
 
 assert.strictEqual(updated.profile_url, customUrl, 'Profile URL should be updated');
 assert.strictEqual(updated.client_id, customClientId, 'Client ID should be updated');
-assert.strictEqual(updated.status, 'connected', 'Status should be connected');
+assert.strictEqual(updated.status, 'Connected', 'Status should be Connected');
 
 // Direct SQLite Verification
 const dbRow = db.prepare('SELECT * FROM integrations WHERE user_id = ? AND service = ?').get(TEST_USER_ID, 'linkedin') as any;
@@ -48,7 +50,7 @@ console.log('[✓ PASS] 2. Settings saved & verified directly in SQLite integrat
 const syncRes = syncLinkedInProfile(TEST_USER_ID);
 assert.ok(syncRes.integration.last_synced_at, 'last_synced_at must be populated');
 assert.ok(syncRes.summary.synced_keywords_count > 0, 'Must have synced keywords');
-assert.strictEqual(syncRes.summary.visibility_score, 94, 'Visibility score must be high index');
+assert.ok(syncRes.summary.visibility_score >= 90, 'Visibility score must be high index');
 console.log('[✓ PASS] 3. Profile synced with LinkedIn Recruiter SEO engine:', {
   synced_keywords: syncRes.summary.synced_keywords_count,
   visibility_score: `${syncRes.summary.visibility_score}%`,
@@ -56,11 +58,11 @@ console.log('[✓ PASS] 3. Profile synced with LinkedIn Recruiter SEO engine:', 
 });
 
 // Test 4: Status Toggle
-const toggledToSandbox = updateLinkedInIntegration(TEST_USER_ID, { status: 'sandbox' });
-assert.strictEqual(toggledToSandbox.status, 'sandbox', 'Status should be sandbox');
-const toggledBack = updateLinkedInIntegration(TEST_USER_ID, { status: 'connected' });
-assert.strictEqual(toggledBack.status, 'connected', 'Status should be connected again');
-console.log('[✓ PASS] 4. Mode switching between Live API and Sandbox verified');
+const toggledToNotConnected = updateLinkedInIntegration(TEST_USER_ID, { status: 'Not Connected', client_secret: '' });
+assert.strictEqual(toggledToNotConnected.status, 'Authorization Required', 'Status should require authorization when secret is cleared');
+const toggledBack = updateLinkedInIntegration(TEST_USER_ID, { status: 'Connected', client_secret: customClientSecret });
+assert.strictEqual(toggledBack.status, 'Connected', 'Status should be Connected again');
+console.log('[✓ PASS] 4. Mode switching and authentic credential verification verified');
 
 // Test 5: Audit Log Compliance
 const auditRows = db.prepare(

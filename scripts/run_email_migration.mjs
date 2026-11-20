@@ -17,7 +17,7 @@ function getCoordinationDbPath(customDbPath) {
   const dbPath = customDbPath || process.env.MIGRATION_DATABASE_PATH || process.env.DATABASE_PATH || path2.join(process.cwd(), "data", "career_app.db");
   return path2.join(path2.dirname(dbPath), COORDINATION_DB_FILENAME);
 }
-function getCoordinationDb2(customDbPath) {
+function getCoordinationDb(customDbPath) {
   const cdbPath = getCoordinationDbPath(customDbPath);
   const existing = cdbCache.get(cdbPath);
   if (existing && existing.open) {
@@ -68,7 +68,7 @@ function getCoordinationDb2(customDbPath) {
 }
 function purgeExpiredLeases(customDbPath) {
   try {
-    const cdb = getCoordinationDb2(customDbPath);
+    const cdb = getCoordinationDb(customDbPath);
     const now = Date.now();
     const res = cdb.prepare("DELETE FROM active_leases WHERE expires_at <= ?").run(now);
     return res.changes;
@@ -116,7 +116,7 @@ function getCrossProcessState(customDbPath) {
         };
       }
     }
-    const cdb = getCoordinationDb2(customDbPath);
+    const cdb = getCoordinationDb(customDbPath);
     const row = cdb.prepare("SELECT * FROM coordination_state WHERE id = 'global'").get();
     if (!row) {
       return { state: "INACTIVE", details: null };
@@ -146,7 +146,7 @@ function acquireCrossProcessWriteLease(options) {
   if (state !== "INACTIVE") {
     throw new MaintenanceActiveError(`Write rejected: cross-process maintenance state is ${state} (${options.label})`);
   }
-  const cdb = getCoordinationDb2(customDbPath);
+  const cdb = getCoordinationDb(customDbPath);
   const leaseId = `lease_${process.pid}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const now = Date.now();
   const ttlMs = options.ttlMs || DEFAULT_LEASE_TTL_MS;
@@ -169,7 +169,7 @@ function acquireCrossProcessWriteLease(options) {
 function getActiveLeasesCount(customDbPath) {
   try {
     purgeExpiredLeases(customDbPath);
-    const cdb = getCoordinationDb2(customDbPath);
+    const cdb = getCoordinationDb(customDbPath);
     const row = cdb.prepare("SELECT COUNT(*) as c FROM active_leases WHERE expires_at > ?").get(Date.now());
     return row?.c || 0;
   } catch {
@@ -179,7 +179,7 @@ function getActiveLeasesCount(customDbPath) {
 function getActiveLeases(customDbPath) {
   try {
     purgeExpiredLeases(customDbPath);
-    const cdb = getCoordinationDb2(customDbPath);
+    const cdb = getCoordinationDb(customDbPath);
     return cdb.prepare("SELECT * FROM active_leases WHERE expires_at > ?").all(Date.now());
   } catch {
     return [];
@@ -187,7 +187,7 @@ function getActiveLeases(customDbPath) {
 }
 function requestMaintenanceDrainSync(options = {}) {
   const customDbPath = options.customDbPath;
-  const cdb = getCoordinationDb2(customDbPath);
+  const cdb = getCoordinationDb(customDbPath);
   const reason = options.reason || "Scheduled database schema migration";
   const operator = options.operator || process.env.USER || process.env.USERNAME || "railway_operator";
   const existing = cdb.prepare("SELECT * FROM coordination_state WHERE id = 'global'").get();
@@ -220,7 +220,7 @@ function requestMaintenanceDrainSync(options = {}) {
   return { success: true, state: "ACTIVE" };
 }
 function deactivateCrossProcessMaintenance(customDbPath) {
-  const cdb = getCoordinationDb2(customDbPath);
+  const cdb = getCoordinationDb(customDbPath);
   cdb.prepare(`
     INSERT INTO coordination_state (id, state, reason, operator, version)
     VALUES ('global', 'INACTIVE', 'Maintenance completed', 'system', 1)
