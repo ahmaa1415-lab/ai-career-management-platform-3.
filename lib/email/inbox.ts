@@ -1,5 +1,6 @@
 import db, { logAudit, getOrCreateDefaultUser } from '../db';
 import { RecruitmentEmail, FullCandidateProfile } from '../types';
+import { isCrossProcessMaintenanceActive } from '../coordination';
 
 export const EMAIL_CATEGORIES = [
   'Opportunity',
@@ -24,68 +25,84 @@ export function getEmailSchemaColumns(): string[] {
 
 // Seed realistic initial recruitment messages if inbox is empty
 export function initializeRecruitmentInbox(userId?: string) {
-  const count = db.prepare('SELECT COUNT(*) as c FROM emails').get() as any;
-  if (count.c === 0) {
-    const seedEmails = [
-      {
-        id: 'email_seed_01',
-        category: 'Interview',
-        sender: 'sarah.miller@careem.com',
-        recipient: 'candidate@example.com',
-        subject: 'Invitation to Technical Architecture Discussion: Careem FinTech',
-        body: 'Hi Aya,\n\nWe reviewed your application for the Staff Software Engineer role in Dubai. Our VP of Engineering was impressed by your distributed systems and Node.js/TypeScript background. We would love to schedule a 45-minute technical conversation next Tuesday at 3:00 PM Gulf Standard Time (1:00 PM Cairo). Please let us know if this slot works.\n\nBest regards,\nSarah Miller\nLead Talent Partner, Careem',
-        is_draft: 0,
-        is_sent: 0
-      },
-      {
-        id: 'email_seed_02',
-        category: 'Confirmation',
-        sender: 'no-reply@gitlab.com',
-        recipient: 'candidate@example.com',
-        subject: 'Application Received: Senior Full Stack Engineer, AI & Workflows (GitLab)',
-        body: 'Dear Candidate,\n\nThank you for applying for the Senior Full Stack Engineer, AI & Workflows position at GitLab. We have received your tailored CV and application package. Our hiring team conducts rolling reviews, and we will update you within 5 business days.\n\nWarm regards,\nGitLab Global Talent Acquisition',
-        is_draft: 0,
-        is_sent: 0
-      },
-      {
-        id: 'email_seed_03',
-        category: 'Recruiter Message',
-        sender: 'marcus.vogel@deliveryhero.com',
-        recipient: 'candidate@example.com',
-        subject: 'Relocation & Engineering Opportunities in Berlin - Delivery Hero',
-        body: 'Hello Aya,\n\nI came across your GitHub and LinkedIn profile and noticed your deep experience in Next.js, Node.js microservices, and high-concurrency architectures. We have an opening on our Berlin logistics core platform with full German EU Blue Card visa sponsorship and relocation support. Would you be open to an exploratory chat this week?\n\nCheers,\nMarcus Vogel\nSenior Tech Recruiter',
-        is_draft: 0,
-        is_sent: 0
+  if (isCrossProcessMaintenanceActive()) {
+    return;
+  }
+  try {
+    const count = db.prepare('SELECT COUNT(*) as c FROM emails').get() as any;
+    if (count.c === 0) {
+      const seedEmails = [
+        {
+          id: 'email_seed_01',
+          category: 'Interview',
+          sender: 'sarah.miller@careem.com',
+          recipient: 'candidate@example.com',
+          subject: 'Invitation to Technical Architecture Discussion: Careem FinTech',
+          body: 'Hi Aya,\n\nWe reviewed your application for the Staff Software Engineer role in Dubai. Our VP of Engineering was impressed by your distributed systems and Node.js/TypeScript background. We would love to schedule a 45-minute technical conversation next Tuesday at 3:00 PM Gulf Standard Time (1:00 PM Cairo). Please let us know if this slot works.\n\nBest regards,\nSarah Miller\nLead Talent Partner, Careem',
+          is_draft: 0,
+          is_sent: 0
+        },
+        {
+          id: 'email_seed_02',
+          category: 'Confirmation',
+          sender: 'no-reply@gitlab.com',
+          recipient: 'candidate@example.com',
+          subject: 'Application Received: Senior Full Stack Engineer, AI & Workflows (GitLab)',
+          body: 'Dear Candidate,\n\nThank you for applying for the Senior Full Stack Engineer, AI & Workflows position at GitLab. We have received your tailored CV and application package. Our hiring team conducts rolling reviews, and we will update you within 5 business days.\n\nWarm regards,\nGitLab Global Talent Acquisition',
+          is_draft: 0,
+          is_sent: 0
+        },
+        {
+          id: 'email_seed_03',
+          category: 'Recruiter Message',
+          sender: 'marcus.vogel@deliveryhero.com',
+          recipient: 'candidate@example.com',
+          subject: 'Relocation & Engineering Opportunities in Berlin - Delivery Hero',
+          body: 'Hello Aya,\n\nI came across your GitHub and LinkedIn profile and noticed your deep experience in Next.js, Node.js microservices, and high-concurrency architectures. We have an opening on our Berlin logistics core platform with full German EU Blue Card visa sponsorship and relocation support. Would you be open to an exploratory chat this week?\n\nCheers,\nMarcus Vogel\nSenior Tech Recruiter',
+          is_draft: 0,
+          is_sent: 0
+        }
+      ];
+
+      const hasUserId = getEmailSchemaColumns().includes('user_id');
+
+      if (hasUserId) {
+        const insert = db.prepare(`
+          INSERT INTO emails (id, user_id, category, sender, recipient, subject, body, is_draft, is_sent)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        db.transaction(() => {
+          for (const e of seedEmails) {
+            insert.run(e.id, userId || null, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
+          }
+        })();
+      } else {
+        const insert = db.prepare(`
+          INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        db.transaction(() => {
+          for (const e of seedEmails) {
+            insert.run(e.id, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
+          }
+        })();
       }
-    ];
-
-    const hasUserId = getEmailSchemaColumns().includes('user_id');
-
-    if (hasUserId) {
-      const insert = db.prepare(`
-        INSERT INTO emails (id, user_id, category, sender, recipient, subject, body, is_draft, is_sent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      db.transaction(() => {
-        for (const e of seedEmails) {
-          insert.run(e.id, userId || null, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
-        }
-      })();
-    } else {
-      const insert = db.prepare(`
-        INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      db.transaction(() => {
-        for (const e of seedEmails) {
-          insert.run(e.id, e.category, e.sender, e.recipient, e.subject, e.body, e.is_draft, e.is_sent);
-        }
-      })();
     }
+  } catch (err: any) {
+    if (err?.code === 'MAINTENANCE_MODE_ACTIVE') {
+      return;
+    }
+    throw err;
   }
 }
 
-initializeRecruitmentInbox();
+try {
+  initializeRecruitmentInbox();
+} catch (err: any) {
+  if (err?.code !== 'MAINTENANCE_MODE_ACTIVE') {
+    throw err;
+  }
+}
 
 /**
  * Retrieves all recruitment emails scoped to the authenticated user.

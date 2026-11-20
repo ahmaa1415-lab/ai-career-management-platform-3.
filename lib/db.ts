@@ -21,7 +21,7 @@ if (!globalForDb._careerAppDb) {
 }
 
 // Driver-level write barrier: protect all mutating statements against maintenance mode and track cross-process in-flight writes
-import { acquireCrossProcessWriteLease } from './coordination';
+import { acquireCrossProcessWriteLease, isCrossProcessMaintenanceActive } from './coordination';
 const originalPrepare = db.prepare.bind(db);
 (db as any).prepare = function (source: string) {
   const statement = originalPrepare(source);
@@ -115,6 +115,9 @@ const originalTransaction = db.transaction.bind(db);
 
 // Schema initialization
 export function initializeSchema() {
+  if (isCrossProcessMaintenanceActive()) {
+    return;
+  }
   try {
     db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -628,7 +631,13 @@ export function initializeSchema() {
 }
 
 // Automatically initialize schema on first import
-initializeSchema();
+try {
+  initializeSchema();
+} catch (err: any) {
+  if (err?.code !== 'MAINTENANCE_MODE_ACTIVE') {
+    throw err;
+  }
+}
 
 // Audit log helper
 export function logAudit(action: string, details: Record<string, any>, userId = 'default-user', ipAddress = '127.0.0.1') {

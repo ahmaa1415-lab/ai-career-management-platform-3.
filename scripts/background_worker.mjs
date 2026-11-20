@@ -8,13 +8,22 @@ const workerId = `worker_${process.pid}_${crypto.randomBytes(3).toString('hex')}
 
 export class BackgroundWorkerManager {
   constructor(customDbPath) {
-    this.db = new Database(customDbPath || dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('busy_timeout = 5000');
-    this.initLeaseTable();
+    this.customDbPath = customDbPath;
+    this._db = null;
+    this._tableInitialized = false;
+  }
+
+  get db() {
+    if (!this._db) {
+      this._db = new Database(this.customDbPath || dbPath);
+      this._db.pragma('journal_mode = WAL');
+      this._db.pragma('busy_timeout = 5000');
+    }
+    return this._db;
   }
 
   initLeaseTable() {
+    if (this._tableInitialized) return;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS worker_leases (
         job_name TEXT PRIMARY KEY,
@@ -23,14 +32,16 @@ export class BackgroundWorkerManager {
         expires_at DATETIME NOT NULL
       );
     `);
+    this._tableInitialized = true;
   }
 
   acquireLock(jobName, leaseDurationMs = 300000, overrideWorkerId = null) {
     const activeWorkerId = overrideWorkerId || workerId;
-    const dbDir = path.dirname(this.db.name);
+    const targetDbPath = this.customDbPath || dbPath;
+    const dbDir = path.dirname(targetDbPath);
     const coordinationDbPath = path.join(dbDir, '.coordination.db');
 
-    // 1. Cross-process coordination safeguard: check .coordination.db and .maintenance_lock
+    // 1. Cross-process coordination safeguard: check .coordination.db and .maintenance_lock BEFORE opening target db
     try {
       if (process.env.MAINTENANCE_MODE === 'true') {
         console.log(`[WORKER_LOCK] Maintenance mode active. Refusing lock acquisition for "${jobName}".`);
@@ -56,6 +67,9 @@ export class BackgroundWorkerManager {
       console.error('[WORKER_LOCK] Failed to inspect maintenance state. Failing closed:', err.message);
       return false;
     }
+
+    // 2. Safe to initialize lease table and acquire lock on target db
+    this.initLeaseTable();
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + leaseDurationMs);
@@ -88,6 +102,7 @@ export class BackgroundWorkerManager {
       if (acquired && fs.existsSync(coordinationDbPath)) {
         try {
           const cdb = new Database(coordinationDbPath, { timeout: 3000 });
+          cdb.prepare("DELETE FROM active_leases WHERE process_type = 'worker' AND label = ?").run(jobName);
           cdb.prepare(`
             INSERT INTO active_leases (lease_id, process_type, pid, label, acquired_at, expires_at)
             VALUES (?, 'worker', ?, ?, ?, ?)
@@ -105,13 +120,16 @@ export class BackgroundWorkerManager {
 
   releaseLock(jobName, overrideWorkerId = null) {
     const activeWorkerId = overrideWorkerId || workerId;
-    const dbDir = path.dirname(this.db.name);
+    const targetDbPath = this.customDbPath || dbPath;
+    const dbDir = path.dirname(targetDbPath);
     const coordinationDbPath = path.join(dbDir, '.coordination.db');
 
-    try {
-      this.db.prepare('DELETE FROM worker_leases WHERE job_name = ? AND locked_by = ?').run(jobName, activeWorkerId);
-    } catch (err) {
-      console.error(`[WORKER_LOCK] Failed to release lock for ${jobName}:`, err);
+    if (this._db) {
+      try {
+        this.db.prepare('DELETE FROM worker_leases WHERE job_name = ? AND locked_by = ?').run(jobName, activeWorkerId);
+      } catch (err) {
+        console.error(`[WORKER_LOCK] Failed to release lock for ${jobName}:`, err);
+      }
     }
 
     if (fs.existsSync(coordinationDbPath)) {
@@ -124,7 +142,10 @@ export class BackgroundWorkerManager {
   }
 
   close() {
-    this.db.close();
+    if (this._db) {
+      this._db.close();
+      this._db = null;
+    }
   }
 }
 
