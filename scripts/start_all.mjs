@@ -4,8 +4,19 @@ import fs from 'fs';
 import Database from 'better-sqlite3';
 import { BackgroundWorkerManager } from './background_worker.mjs';
 import { SQLiteBackupManager } from './backup_manager.mjs';
+import {
+  ShutdownCoordinator,
+  ShutdownState,
+  executeAndValidateWalCheckpoint,
+  validateWalCheckpointResult
+} from './shutdown_coordinator.mjs';
 
-console.log('=== [CONTAINER SUPERVISOR: WEB + BACKGROUND WORKER + BACKUP SCHEDULER] ===');
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  console.log('=== [CONTAINER SUPERVISOR: WEB + BACKGROUND WORKER + BACKUP SCHEDULER] ===');
+}
+
+// Initialize shutdown lifecycle coordinator
+const shutdownCoordinator = new ShutdownCoordinator();
 
 // ==============================================================================
 // 1. RUNTIME ENVIRONMENT CONFIGURATION GATE
@@ -44,32 +55,54 @@ const backupDir = path.join(dbDir, 'backups');
 if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
 
 // ==============================================================================
-// 2. SPAWN NEXT.JS WEB PROCESS
+// 2. SPAWN NEXT.JS WEB PROCESS (DIRECT INVOCATION WITHOUT NPM/NPX INTERMEDIARY)
 // ==============================================================================
-console.log(`[SUPERVISOR] Spawning Next.js Web Server on ${hostName}:${webPort}...`);
+let webProcess = null;
 
-const webProcess = spawn('npx', ['next', 'start', '-p', webPort, '-H', hostName], {
-  stdio: 'inherit',
-  shell: true,
-  env: {
-    ...process.env,
-    PORT: webPort,
-    HOSTNAME: hostName,
-    DATABASE_PATH: dbPath,
-    UPLOADS_DIR: uploadsDir
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  const projectRoot = process.cwd();
+  const nextCliPath = path.join(projectRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
+
+  if (!fs.existsSync(nextCliPath)) {
+    console.error(`[FATAL PROCESS ERROR] Next.js CLI entrypoint not found at: ${nextCliPath}`);
+    console.error('[FATAL PROCESS ERROR] Refusing to start supervisor with missing or unverified Next.js binary.');
+    process.exit(1);
   }
-});
 
-webProcess.on('error', (err) => {
-  console.error('[SUPERVISOR] Failed to launch Next.js process:', err);
-  process.exit(1);
-});
+  const spawnExec = process.execPath; // Verified local Node binary
+  const spawnArgs = [nextCliPath, 'start', '-p', String(webPort), '-H', hostName];
 
-webProcess.on('exit', (code, signal) => {
-  console.log(`[SUPERVISOR] Next.js process exited with code ${code} / signal ${signal}.`);
-  // Critical: Container must exit when web server terminates
-  process.exit(code ?? 1);
-});
+  console.log(`[SUPERVISOR] Spawning Next.js Web Server directly via ${spawnExec}...`);
+  console.log(` - Entrypoint: ${nextCliPath}`);
+  console.log(` - WorkingDir: ${projectRoot}`);
+  console.log(` - Host/Port:  ${hostName}:${webPort}`);
+
+  webProcess = spawn(spawnExec, spawnArgs, {
+    cwd: projectRoot,
+    stdio: 'inherit',
+    shell: false, // Strictly NO shell wrapper on any platform (eliminates npx/shell indirection)
+    env: {
+      ...process.env,
+      PORT: String(webPort),
+      HOSTNAME: hostName,
+      DATABASE_PATH: dbPath,
+      UPLOADS_DIR: uploadsDir
+    }
+  });
+
+  webProcess.on('error', (err) => {
+    console.error('[SUPERVISOR] Failed to launch Next.js process:', err);
+    process.exit(1);
+  });
+
+  webProcess.on('exit', (code, signal) => {
+    console.log(`[SUPERVISOR] Next.js process exited with code ${code} / signal ${signal}.`);
+    if (!shutdownCoordinator.isShuttingDown) {
+      console.error('[SUPERVISOR] Next.js process terminated unexpectedly. Initiating emergency supervisor shutdown...');
+      handleShutdown(signal || 'SIGTERM', code ?? 1);
+    }
+  });
+}
 
 // ==============================================================================
 // 3. BACKGROUND WORKER PROCESS WITH DISTRIBUTED LEASE & AUDITING
@@ -127,7 +160,9 @@ function reconcileStartupMaintenanceState() {
 }
 
 // Reconcile maintenance coordination state on startup
-reconcileStartupMaintenanceState();
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  reconcileStartupMaintenanceState();
+}
 
 function updateSupervisorStatus() {
   try {
@@ -297,16 +332,20 @@ function recordWorkerEvent(action, details) {
 }
 
 // Maintenance state watcher: when maintenance transitions to inactive, flush deferred audits
-setInterval(() => {
-  const isMaint = isSupervisorMaintenanceActive();
-  if (wasMaintenanceActive && !isMaint) {
-    console.log('[SUPERVISOR] Maintenance window ended. Triggering deferred audit event flush...');
-    flushDeferredAuditEvents();
-  }
-  wasMaintenanceActive = isMaint;
-}, 5000);
+let maintenanceWatcherInterval = null;
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  maintenanceWatcherInterval = setInterval(() => {
+    const isMaint = isSupervisorMaintenanceActive();
+    if (wasMaintenanceActive && !isMaint) {
+      console.log('[SUPERVISOR] Maintenance window ended. Triggering deferred audit event flush...');
+      flushDeferredAuditEvents();
+    }
+    wasMaintenanceActive = isMaint;
+  }, 5000);
+}
 
 function registerSupervisorLease(leaseId, processType, label, ttlMs = 120000) {
+  shutdownCoordinator.registerOwnedLease(leaseId);
   const cdb = getCoordinationDb();
   if (cdb) {
     try {
@@ -324,6 +363,7 @@ function registerSupervisorLease(leaseId, processType, label, ttlMs = 120000) {
 }
 
 function releaseSupervisorLease(leaseId) {
+  shutdownCoordinator.releaseOwnedLease(leaseId);
   const cdb = getCoordinationDb();
   if (cdb) {
     try {
@@ -335,8 +375,8 @@ function releaseSupervisorLease(leaseId) {
 }
 
 async function triggerWorkerCycle() {
-  if (isSupervisorMaintenanceActive()) {
-    console.log('[SUPERVISOR-WORKER] Maintenance mode active. Skipping worker cycle and lease acquisition.');
+  if (shutdownCoordinator.isShuttingDown || isSupervisorMaintenanceActive()) {
+    console.log('[SUPERVISOR-WORKER] Maintenance mode active or shutting down. Skipping worker cycle.');
     return;
   }
   if (workerActive) {
@@ -386,15 +426,19 @@ async function triggerWorkerCycle() {
 }
 
 // Worker scheduler timers
-const workerInitialTimer = setTimeout(triggerWorkerCycle, 5000);
-const workerInterval = setInterval(triggerWorkerCycle, 300000); // Every 5 minutes
+let workerInitialTimer = null;
+let workerInterval = null;
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  workerInitialTimer = setTimeout(triggerWorkerCycle, 5000);
+  workerInterval = setInterval(triggerWorkerCycle, 300000); // Every 5 minutes
+}
 
 // ==============================================================================
 // 4. AUTOMATED SQLITE BACKUP SCHEDULER
 // ==============================================================================
 async function triggerBackupJob() {
-  if (isSupervisorMaintenanceActive()) {
-    console.log('[SUPERVISOR-BACKUP] Maintenance mode active. Skipping automated backup to avoid conflict.');
+  if (shutdownCoordinator.isShuttingDown || isSupervisorMaintenanceActive()) {
+    console.log('[SUPERVISOR-BACKUP] Maintenance mode active or shutting down. Skipping automated backup.');
     return;
   }
   if (backupActive) {
@@ -428,32 +472,69 @@ async function triggerBackupJob() {
 }
 
 // Backup scheduler: initial backup check after 10s, then every 24 hours
-const backupInitialTimer = setTimeout(triggerBackupJob, 10000);
-const backupInterval = setInterval(triggerBackupJob, 24 * 60 * 60 * 1000);
-
-// ==============================================================================
-// 5. GRACEFUL PROCESS SHUTDOWN
-// ==============================================================================
-function handleShutdown(signal) {
-  console.log(`[SUPERVISOR] Received ${signal}. Executing graceful shutdown...`);
-  clearTimeout(workerInitialTimer);
-  clearInterval(workerInterval);
-  clearTimeout(backupInitialTimer);
-  clearInterval(backupInterval);
-
-  // Terminate web server
-  webProcess.kill(signal);
-
-  // Flush SQLite WAL checkpoint before terminating
-  try {
-    const db = new Database(dbPath);
-    db.pragma('wal_checkpoint(TRUNCATE)');
-    db.close();
-    console.log('[SUPERVISOR] SQLite WAL checkpoint flushed successfully.');
-  } catch {}
-
-  process.exit(0);
+let backupInitialTimer = null;
+let backupInterval = null;
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  backupInitialTimer = setTimeout(triggerBackupJob, 10000);
+  backupInterval = setInterval(triggerBackupJob, 24 * 60 * 60 * 1000);
 }
 
-process.on('SIGTERM', () => handleShutdown('SIGTERM'));
-process.on('SIGINT', () => handleShutdown('SIGINT'));
+// ==============================================================================
+// 5. GRACEFUL PROCESS SHUTDOWN & ORDERED QUIESCENCE
+// ==============================================================================
+async function handleShutdown(signal = 'SIGTERM', forcedExitCode = null, options = {}) {
+  const targetWebProcess = options.webProcess !== undefined ? options.webProcess : webProcess;
+  const targetDbPath = options.dbPath || dbPath;
+  const targetCoordDbPath = options.coordinationDbPath || (targetDbPath ? path.join(path.dirname(targetDbPath), '.coordination.db') : coordinationDbPath);
+  const targetStatusPath = options.statusPath || supervisorStatusPath;
+
+  const result = await shutdownCoordinator.executeShutdown(signal, forcedExitCode, {
+    webProcess: targetWebProcess,
+    dbPath: targetDbPath,
+    coordinationDbPath: targetCoordDbPath,
+    statusFilePath: targetStatusPath,
+    drainTimeoutMs: options.drainTimeoutMs ?? 5000,
+    gracePeriodMs: options.gracePeriodMs ?? 10000,
+    postKillTimeoutMs: options.postKillTimeoutMs ?? 5000,
+    checkpointTimeoutMs: options.checkpointTimeoutMs ?? 10000,
+    suppressExit: options.suppressExit,
+    cancelTimers: () => {
+      if (workerInitialTimer) clearTimeout(workerInitialTimer);
+      if (workerInterval) clearInterval(workerInterval);
+      if (backupInitialTimer) clearTimeout(backupInitialTimer);
+      if (backupInterval) clearInterval(backupInterval);
+      if (maintenanceWatcherInterval) clearInterval(maintenanceWatcherInterval);
+    },
+    isWorkActive: () => (workerActive || backupActive)
+  });
+
+  return result.exitCode;
+}
+
+if (process.env.SUPERVISOR_DISABLE_AUTOSPAWN !== 'true') {
+  process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+  process.on('SIGINT', () => handleShutdown('SIGINT'));
+}
+
+// Export supervisor interfaces for testing and programmatic orchestration
+export {
+  handleShutdown,
+  isSupervisorMaintenanceActive,
+  triggerWorkerCycle,
+  triggerBackupJob,
+  updateSupervisorStatus,
+  getCoordinationDb,
+  reconcileStartupMaintenanceState,
+  shutdownCoordinator,
+  ShutdownState,
+  executeAndValidateWalCheckpoint,
+  validateWalCheckpointResult,
+  registerSupervisorLease,
+  releaseSupervisorLease
+};
+export function getIsShuttingDown() { return shutdownCoordinator.isShuttingDown; }
+export function _resetShutdownStateForTesting() {
+  shutdownCoordinator.resetForTesting();
+  workerActive = false;
+  backupActive = false;
+}
