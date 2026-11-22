@@ -63,55 +63,174 @@ fi
 echo "PASS: PID 1 is /usr/bin/tini."
 
 echo ">>> [5/12] Verifying Node supervisor runs as non-root user (nextjs / uid 1001)..."
-SUPERVISOR_USER=$(docker exec "${CONTAINER_NAME}" sh -c '
+
+# Discover Supervisor candidates excluding PID 1 (which is tini)
+# Candidate must be a node process running scripts/start_all.mjs
+SUPERVISOR_CANDIDATES=$(docker exec "${CONTAINER_NAME}" sh -c '
+  candidates=""
   for p in /proc/[0-9]*; do
     [ -d "$p" ] || continue
-    cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
-    case "$cmd" in
-      *start_all.mjs*)
-        awk "/^Uid:/ {print \$2}" "$p/status" 2>/dev/null
-        break
-        ;;
+    pid=$(basename "$p")
+    [ "$pid" = "1" ] && continue
+    
+    # 1. Verify process comm identity is node
+    comm=$(cat "$p/comm" 2>/dev/null || echo "")
+    [ "$comm" = "node" ] || continue
+    
+    # 2. Verify exe symlink target resolves to node binary
+    exe=$(readlink -f "$p/exe" 2>/dev/null || echo "")
+    case "$exe" in
+      */node) ;;
+      *) continue ;;
     esac
+    
+    # 3. Argument-boundary-aware check: split cmdline on NUL and match target argument
+    has_target_script=false
+    for arg in $(tr "\0" "\n" < "$p/cmdline" 2>/dev/null); do
+      case "$arg" in
+        "scripts/start_all.mjs"|"./scripts/start_all.mjs"|*/scripts/start_all.mjs)
+          has_target_script=true
+          break
+          ;;
+      esac
+    done
+    [ "$has_target_script" = "true" ] || continue
+    
+    candidates="$candidates $pid"
   done
+  echo $candidates
 ' | tr -d '\r')
-echo "Supervisor process user: ${SUPERVISOR_USER}"
-if [[ "${SUPERVISOR_USER}" != "nextjs" && "${SUPERVISOR_USER}" != "1001" ]]; then
-  echo "FAIL: Supervisor is running as root or unexpected user: ${SUPERVISOR_USER}"
+
+CANDIDATE_COUNT=$(echo ${SUPERVISOR_CANDIDATES} | awk '{print NF}')
+if [[ "${CANDIDATE_COUNT}" -eq 0 ]]; then
+  echo "FAIL: Expected exactly 1 Supervisor candidate running node scripts/start_all.mjs (excluding PID 1), found 0!"
+  dump_proc_tree
+  exit 1
+elif [[ "${CANDIDATE_COUNT}" -gt 1 ]]; then
+  echo "FAIL: Ambiguous Supervisor identity: expected 1 candidate, found ${CANDIDATE_COUNT} (${SUPERVISOR_CANDIDATES})!"
+  dump_proc_tree
   exit 1
 fi
-echo "PASS: Supervisor runs as unprivileged user nextjs (1001)."
+
+SUPERVISOR_PID=$(echo "${SUPERVISOR_CANDIDATES}" | awk '{print $1}')
+echo "Discovered Supervisor PID: ${SUPERVISOR_PID}"
+
+# Verify process command line
+SUPERVISOR_CMD=$(docker exec "${CONTAINER_NAME}" sh -c "tr '\0' ' ' < /proc/${SUPERVISOR_PID}/cmdline 2>/dev/null" | tr -d '\r')
+echo "Supervisor command line: ${SUPERVISOR_CMD}"
+if [[ -z "${SUPERVISOR_CMD}" ]]; then
+  echo "FAIL: Supervisor process PID ${SUPERVISOR_PID} command line is empty or process disappeared!"
+  dump_proc_tree
+  exit 1
+fi
+if [[ "${SUPERVISOR_CMD}" != *"scripts/start_all.mjs"* ]]; then
+  echo "FAIL: Candidate PID ${SUPERVISOR_PID} command line does not contain scripts/start_all.mjs! Received: '${SUPERVISOR_CMD}'"
+  exit 1
+fi
+
+# Verify process user is unprivileged (nextjs / UID 1001)
+SUPERVISOR_USER=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^Uid:/ {print \$2}' /proc/${SUPERVISOR_PID}/status 2>/dev/null" | tr -d '\r')
+echo "Supervisor process user UID: ${SUPERVISOR_USER}"
+if [[ -z "${SUPERVISOR_USER}" ]]; then
+  echo "FAIL: Supervisor process PID ${SUPERVISOR_PID} disappeared or status file became unreadable!"
+  dump_proc_tree
+  exit 1
+fi
+if [[ ! "${SUPERVISOR_USER}" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: Supervisor UID is not numeric: '${SUPERVISOR_USER}'!"
+  dump_proc_tree
+  exit 1
+fi
+if [[ "${SUPERVISOR_USER}" != "1001" ]]; then
+  echo "FAIL: Supervisor UID is '${SUPERVISOR_USER}', expected 1001 (nextjs)!"
+  dump_proc_tree
+  exit 1
+fi
+echo "PASS: Supervisor runs as unprivileged user nextjs (UID 1001)."
 
 echo ">>> [6/12] Verifying Next.js server and Background Worker are children of Supervisor..."
-SUPERVISOR_PID=$(docker exec "${CONTAINER_NAME}" sh -c '
-  for p in /proc/[0-9]*; do
-    [ -d "$p" ] || continue
-    cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
-    case "$cmd" in
-      *start_all.mjs*)
-        basename "$p"
-        break
-        ;;
-    esac
-  done
-' | tr -d '\r')
-echo "Supervisor PID: ${SUPERVISOR_PID}"
+echo "Using Supervisor PID: ${SUPERVISOR_PID}"
 
-WORKER_PPID=$(docker exec "${CONTAINER_NAME}" sh -c '
+# Bounded polling for child server process spawned by Supervisor
+CHILD_SERVER_PID=""
+CHILD_SERVER_PPID=""
+for i in {1..20}; do
+  CHILD_INFO=$(docker exec "${CONTAINER_NAME}" sh -c '
+    for p in /proc/[0-9]*; do
+      [ -d "$p" ] || continue
+      pid=$(basename "$p")
+      [ "$pid" = "1" ] && continue
+      [ "$pid" = "'"${SUPERVISOR_PID}"'" ] && continue
+      cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
+      case "$cmd" in
+        *"node"*"/next"*"start"*|*"next-server"*)
+          ppid=$(awk "/^PPid:/ {print \$2}" "$p/status" 2>/dev/null || echo "")
+          echo "$pid $ppid"
+          break
+          ;;
+      esac
+    done
+  ' | tr -d '\r')
+  if [[ -n "${CHILD_INFO}" ]]; then
+    CHILD_SERVER_PID=$(echo "${CHILD_INFO}" | awk '{print $1}')
+    CHILD_SERVER_PPID=$(echo "${CHILD_INFO}" | awk '{print $2}')
+    break
+  fi
+  sleep 0.5
+done
+
+echo "Child server PID: ${CHILD_SERVER_PID}"
+echo "Child server PPID: ${CHILD_SERVER_PPID}"
+
+if [[ -z "${CHILD_SERVER_PID}" || -z "${CHILD_SERVER_PPID}" ]]; then
+  echo "FAIL: Supervisor child process was not spawned or PPID is empty/missing!"
+  dump_proc_tree
+  exit 1
+fi
+
+if [[ ! "${CHILD_SERVER_PPID}" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: Child PPID is not a valid decimal integer: '${CHILD_SERVER_PPID}'!"
+  dump_proc_tree
+  exit 1
+fi
+
+if [[ "${CHILD_SERVER_PPID}" != "${SUPERVISOR_PID}" ]]; then
+  echo "FAIL: Child PPID (${CHILD_SERVER_PPID}) does not match Supervisor PID (${SUPERVISOR_PID})!"
+  dump_proc_tree
+  exit 1
+fi
+echo "PASS: Next.js server (PID ${CHILD_SERVER_PID}) is a verified child of Supervisor (PPID ${CHILD_SERVER_PPID} == ${SUPERVISOR_PID})."
+
+# If a standalone background worker process is also present, verify its PPID strictly matches SUPERVISOR_PID
+WORKER_INFO=$(docker exec "${CONTAINER_NAME}" sh -c '
   for p in /proc/[0-9]*; do
     [ -d "$p" ] || continue
     cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
     case "$cmd" in
       *background_worker.mjs*)
-        awk "/^PPid:/ {print \$2}" "$p/status" 2>/dev/null
+        pid=$(basename "$p")
+        ppid=$(awk "/^PPid:/ {print \$2}" "$p/status" 2>/dev/null || echo "")
+        echo "$pid $ppid"
         break
         ;;
     esac
   done
-' | tr -d '\r' || true)
-echo "Worker PPID: ${WORKER_PPID}"
-if [[ -n "${WORKER_PPID}" && "${WORKER_PPID}" != "${SUPERVISOR_PID}" ]]; then
-  echo "WARNING: Worker PPID (${WORKER_PPID}) does not match Supervisor PID (${SUPERVISOR_PID})"
+' | tr -d '\r')
+
+if [[ -n "${WORKER_INFO}" ]]; then
+  WORKER_PID=$(echo "${WORKER_INFO}" | awk '{print $1}')
+  WORKER_PPID=$(echo "${WORKER_INFO}" | awk '{print $2}')
+  if [[ ! "${WORKER_PPID}" =~ ^[0-9]+$ ]]; then
+    echo "FAIL: Standalone Worker PPID is not a valid integer: '${WORKER_PPID}'!"
+    exit 1
+  fi
+  if [[ "${WORKER_PPID}" != "${SUPERVISOR_PID}" ]]; then
+    echo "FAIL: Standalone Worker PPID (${WORKER_PPID}) does not match Supervisor PID (${SUPERVISOR_PID})!"
+    exit 1
+  fi
+  echo "PASS: Standalone Background Worker (PID ${WORKER_PID}) is a verified child of Supervisor (PPID ${WORKER_PPID})."
+else
+  echo "INFO: Background worker is operating in integrated in-process mode within Supervisor PID ${SUPERVISOR_PID} (Option B)."
 fi
 
 echo ">>> [7/12] Verifying Healthcheck Endpoint..."
