@@ -16,6 +16,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Helper: Dump container process table via /proc (zero external binary dependencies in slim container)
+dump_proc_tree() {
+  docker exec "${CONTAINER_NAME}" sh -c '
+    printf "%-7s %-7s %-7s %s\n" "PID" "PPID" "USER" "COMMAND"
+    for p in /proc/[0-9]*; do
+      [ -d "$p" ] || continue
+      pid=$(basename "$p")
+      ppid=$(awk '\''/^PPid:/ {print $2}'\'' "$p/status" 2>/dev/null || echo "?")
+      uid=$(awk '\''/^Uid:/ {print $2}'\'' "$p/status" 2>/dev/null || echo "?")
+      cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
+      [ -z "$cmd" ] && cmd=$(cat "$p/comm" 2>/dev/null || echo "")
+      printf "%-7s %-7s %-7s %s\n" "$pid" "$ppid" "$uid" "$cmd"
+    done
+  '
+}
+
 echo ">>> [1/12] Building Docker image with tini..."
 docker build -t "${IMAGE_NAME}" -f Dockerfile .
 
@@ -34,11 +50,11 @@ echo ">>> Waiting for container to initialize..."
 sleep 5
 
 echo ">>> [3/12] Inspecting Container Process Tree..."
-PROC_TREE=$(docker exec "${CONTAINER_NAME}" ps -eo pid,ppid,user,args)
+PROC_TREE=$(dump_proc_tree)
 echo "${PROC_TREE}"
 
 echo ">>> [4/12] Verifying PID 1 is tini..."
-PID1_CMD=$(docker exec "${CONTAINER_NAME}" ps -p 1 -o args= | tr -d '\r')
+PID1_CMD=$(docker exec "${CONTAINER_NAME}" sh -c 'tr "\0" " " < /proc/1/cmdline 2>/dev/null || readlink -f /proc/1/exe 2>/dev/null' | tr -d '\r')
 echo "PID 1 command: ${PID1_CMD}"
 if [[ "${PID1_CMD}" != *"/usr/bin/tini"* && "${PID1_CMD}" != *"tini"* ]]; then
   echo "FAIL: PID 1 is not tini! Received: ${PID1_CMD}"
@@ -47,7 +63,18 @@ fi
 echo "PASS: PID 1 is /usr/bin/tini."
 
 echo ">>> [5/12] Verifying Node supervisor runs as non-root user (nextjs / uid 1001)..."
-SUPERVISOR_USER=$(docker exec "${CONTAINER_NAME}" ps -eo user,args | grep "start_all.mjs" | grep -v grep | awk '{print $1}' | tr -d '\r')
+SUPERVISOR_USER=$(docker exec "${CONTAINER_NAME}" sh -c '
+  for p in /proc/[0-9]*; do
+    [ -d "$p" ] || continue
+    cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
+    case "$cmd" in
+      *start_all.mjs*)
+        awk "/^Uid:/ {print \$2}" "$p/status" 2>/dev/null
+        break
+        ;;
+    esac
+  done
+' | tr -d '\r')
 echo "Supervisor process user: ${SUPERVISOR_USER}"
 if [[ "${SUPERVISOR_USER}" != "nextjs" && "${SUPERVISOR_USER}" != "1001" ]]; then
   echo "FAIL: Supervisor is running as root or unexpected user: ${SUPERVISOR_USER}"
@@ -56,10 +83,32 @@ fi
 echo "PASS: Supervisor runs as unprivileged user nextjs (1001)."
 
 echo ">>> [6/12] Verifying Next.js server and Background Worker are children of Supervisor..."
-SUPERVISOR_PID=$(docker exec "${CONTAINER_NAME}" ps -eo pid,args | grep "start_all.mjs" | grep -v grep | awk '{print $1}' | tr -d '\r')
+SUPERVISOR_PID=$(docker exec "${CONTAINER_NAME}" sh -c '
+  for p in /proc/[0-9]*; do
+    [ -d "$p" ] || continue
+    cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
+    case "$cmd" in
+      *start_all.mjs*)
+        basename "$p"
+        break
+        ;;
+    esac
+  done
+' | tr -d '\r')
 echo "Supervisor PID: ${SUPERVISOR_PID}"
 
-WORKER_PPID=$(docker exec "${CONTAINER_NAME}" ps -eo ppid,args | grep "background_worker.mjs" | grep -v grep | awk '{print $1}' | tr -d '\r' || true)
+WORKER_PPID=$(docker exec "${CONTAINER_NAME}" sh -c '
+  for p in /proc/[0-9]*; do
+    [ -d "$p" ] || continue
+    cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
+    case "$cmd" in
+      *background_worker.mjs*)
+        awk "/^PPid:/ {print \$2}" "$p/status" 2>/dev/null
+        break
+        ;;
+    esac
+  done
+' | tr -d '\r' || true)
 echo "Worker PPID: ${WORKER_PPID}"
 if [[ -n "${WORKER_PPID}" && "${WORKER_PPID}" != "${SUPERVISOR_PID}" ]]; then
   echo "WARNING: Worker PPID (${WORKER_PPID}) does not match Supervisor PID (${SUPERVISOR_PID})"
@@ -78,7 +127,7 @@ done
 echo ">>> [8/12] Testing Deterministic Zombie / Orphan Reaping via Tini..."
 
 # 1. Re-verify PID 1 is /usr/bin/tini before starting orphan test
-PID1_EXE=$(docker exec "${CONTAINER_NAME}" sh -c 'readlink -f /proc/1/exe 2>/dev/null || ps -p 1 -o args=' | tr -d '\r')
+PID1_EXE=$(docker exec "${CONTAINER_NAME}" sh -c 'readlink -f /proc/1/exe 2>/dev/null || tr "\0" " " < /proc/1/cmdline 2>/dev/null' | tr -d '\r')
 echo "Container PID 1 target: ${PID1_EXE}"
 if [[ "${PID1_EXE}" != *"/usr/bin/tini"* && "${PID1_EXE}" != *"tini"* ]]; then
   echo "FAIL: PID 1 is not /usr/bin/tini! Target: ${PID1_EXE}"
@@ -101,7 +150,7 @@ if [[ -z "${ORPHAN_PID}" || ! "${ORPHAN_PID}" =~ ^[0-9]+$ ]]; then
 fi
 
 # 3. Verify process exists and belongs to the sleep command
-CMD_LINE=$(docker exec "${CONTAINER_NAME}" ps -p "${ORPHAN_PID}" -o args= | tr -d '\r' || true)
+CMD_LINE=$(docker exec "${CONTAINER_NAME}" sh -c "tr '\0' ' ' < /proc/${ORPHAN_PID}/cmdline 2>/dev/null || cat /proc/${ORPHAN_PID}/comm 2>/dev/null" | tr -d '\r' || true)
 echo "Target process commandline: ${CMD_LINE}"
 if [[ "${CMD_LINE}" != *"sleep"* ]]; then
   echo "FAIL: PID ${ORPHAN_PID} does not correspond to the spawned sleep process! args: '${CMD_LINE}'"
@@ -193,8 +242,8 @@ for i in {1..20}; do
     fi
   fi
 
-  PPID_VAL=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^PPid:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null || ps -p ${ORPHAN_PID} -o ppid= 2>/dev/null" | tr -d ' \r' || true)
-  STATE_VAL=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^State:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null || ps -p ${ORPHAN_PID} -o stat= 2>/dev/null" | tr -d ' \r' | cut -c1 || true)
+  PPID_VAL=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^PPid:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null" | tr -d ' \r' || true)
+  STATE_VAL=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^State:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null" | tr -d ' \r' | cut -c1 || true)
 
   if [[ "${PPID_VAL}" == "1" ]]; then
     echo "Observed adoption by PID 1 on attempt $i (State: ${STATE_VAL}, PPID: ${PPID_VAL}, StartTime: ${ORPHAN_STARTTIME})."
@@ -245,7 +294,7 @@ done
 
 if [[ "${REAPED}" != "true" ]]; then
   echo "FAIL: Process PID ${ORPHAN_PID} still present in /proc or lingering as un-reaped zombie!"
-  docker exec "${CONTAINER_NAME}" ps -eo pid,ppid,stat,args
+  dump_proc_tree
   exit 1
 fi
 echo "PASS: Deterministic orphan adoption and PID 1 reaping verified for PID ${ORPHAN_PID}."
