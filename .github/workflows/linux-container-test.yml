@@ -2,7 +2,7 @@ name: Linux Container Process Lifecycle & Tini Verification
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, ci/linux-lifecycle-test ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
