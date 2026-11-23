@@ -1,4 +1,51 @@
 #!/usr/bin/env bash
+
+# ------------------------------------------------------------------------------
+# validate_shutdown_logs: Validates container graceful shutdown sequence & code
+# ------------------------------------------------------------------------------
+validate_shutdown_logs() {
+  local logs="$1"
+  local exit_code="${2:-}"
+
+  # 1. Verify container exit code is provided and non-empty
+  if [ -z "${exit_code}" ]; then
+    echo "FAIL: Container exit code is missing or empty (failed docker wait execution)!"
+    return 1
+  fi
+
+  # 2. Verify container exit code (0 or 143 for orderly SIGTERM)
+  if [[ "${exit_code}" != "0" && "${exit_code}" != "143" ]]; then
+    echo "FAIL: Expected container exit code 0 or 143 (orderly SIGTERM), got: '${exit_code}'!"
+    return 1
+  fi
+
+  # 2. Verify explicit state transition marker
+  if [[ "${logs}" != *"[SUPERVISOR-STATE] Transitioned to SHUTDOWN_COMPLETE"* ]]; then
+    echo "FAIL: Container logs missing explicit shutdown completion marker '[SUPERVISOR-STATE] Transitioned to SHUTDOWN_COMPLETE'!"
+    return 1
+  fi
+
+  # 3. Verify successful shutdown completion message
+  if [[ "${logs}" != *"[SUPERVISOR] Shutdown completed successfully"* ]]; then
+    echo "FAIL: Container logs missing successful shutdown message '[SUPERVISOR] Shutdown completed successfully'!"
+    return 1
+  fi
+
+  # 4. Verify WAL checkpoint execution confirmation
+  if [[ "${logs}" != *"[SUPERVISOR-WAL] Checkpoint successfully transferred frames"* ]]; then
+    echo "FAIL: Container logs missing WAL checkpoint success confirmation!"
+    return 1
+  fi
+
+  echo "PASS: Signal forwarding and graceful shutdown confirmed in container logs."
+  return 0
+}
+
+# Sourcing guard: allow testing validate_shutdown_logs without executing the container lifecycle
+if [ "${CI_LIFECYCLE_LIB_ONLY:-0}" = "1" ] || { [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; }; then
+  return 0 2>/dev/null || exit 0
+fi
+
 set -euo pipefail
 
 echo "================================================================================"
@@ -385,35 +432,52 @@ START_SHUTDOWN=$(date +%s)
 docker kill -s SIGTERM "${CONTAINER_NAME}"
 
 echo ">>> Waiting for container to stop..."
-docker wait "${CONTAINER_NAME}" || true
+CONTAINER_EXIT_CODE=$(docker wait "${CONTAINER_NAME}" 2>/dev/null | tr -d '\r' || true)
 SHUTDOWN_DURATION=$(( $(date +%s) - START_SHUTDOWN ))
-echo "Container stopped in ${SHUTDOWN_DURATION} seconds."
+echo "Container stopped in ${SHUTDOWN_DURATION} seconds with exit code: ${CONTAINER_EXIT_CODE}."
 
 echo ">>> [10/12] Inspecting Container Shutdown Logs..."
 CONTAINER_LOGS=$(docker logs "${CONTAINER_NAME}" 2>&1)
 echo "${CONTAINER_LOGS}"
 
-if [[ "${CONTAINER_LOGS}" != *"SIGTERM"* && "${CONTAINER_LOGS}" != *"Graceful shutdown complete"* ]]; then
-  echo "FAIL: Container did not record graceful shutdown sequence in logs!"
-  exit 1
-fi
-echo "PASS: Signal forwarding and graceful shutdown confirmed in container logs."
+validate_shutdown_logs "${CONTAINER_LOGS}" "${CONTAINER_EXIT_CODE}"
 
 echo ">>> [11/12] Validating SQLite WAL Checkpoint and Database Integrity..."
 # Inspect database in mounted volume
-sqlite3 "${DATA_VOLUME_DIR}/career_app.db" "PRAGMA integrity_check;" | grep -q "ok"
-echo "PASS: SQLite integrity check OK."
+if command -v sqlite3 >/dev/null 2>&1; then
+  sqlite3 "${DATA_VOLUME_DIR}/career_app.db" "PRAGMA integrity_check;" | grep -q "ok"
+  echo "PASS: SQLite integrity check OK."
+else
+  echo "Note: Host sqlite3 CLI not found; skipping offline PRAGMA integrity_check (WAL checkpoint validated via supervisor logs & file size)."
+fi
 
 # Verify WAL file status (TRUNCATE checkpoint leaves WAL empty or cleanly checkpointed)
 if [ -f "${DATA_VOLUME_DIR}/career_app.db-wal" ]; then
-  WAL_SIZE=$(wc -c < "${DATA_VOLUME_DIR}/career_app.db-wal")
+  WAL_SIZE=$(wc -c < "${DATA_VOLUME_DIR}/career_app.db-wal" | tr -d '[:space:]')
   echo "WAL file size after shutdown: ${WAL_SIZE} bytes"
+  if [ "${WAL_SIZE:-0}" -ne 0 ]; then
+    echo "FAIL: Expected WAL file size 0 bytes after TRUNCATE checkpoint, got ${WAL_SIZE} bytes!"
+    exit 1
+  fi
 fi
+echo "PASS: SQLite WAL checkpoint verified."
 
 echo ">>> [12/12] Testing Container Restartability..."
 docker start "${CONTAINER_NAME}"
-sleep 5
-docker exec "${CONTAINER_NAME}" curl -sf http://localhost:3000/api/health >/dev/null
+RESTART_OK=false
+for i in $(seq 1 10); do
+  if docker exec "${CONTAINER_NAME}" curl -sf http://localhost:3000/api/health >/dev/null 2>&1; then
+    RESTART_OK=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "${RESTART_OK}" != "true" ]; then
+  echo "FAIL: Container restarted but healthcheck failed after 10 attempts!"
+  docker logs "${CONTAINER_NAME}"
+  exit 1
+fi
 echo "PASS: Container restarted cleanly and passed healthcheck."
 
 echo "================================================================================"

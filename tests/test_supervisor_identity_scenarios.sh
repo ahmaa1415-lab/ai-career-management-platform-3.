@@ -22,6 +22,15 @@ fi
 # Source the exact production library to test functions directly
 . "${PROD_LIB}"
 
+CI_LIFECYCLE_LIB="scripts/ci_test_linux_lifecycle.sh"
+if [ ! -f "${CI_LIFECYCLE_LIB}" ]; then
+  echo "FAIL: CI lifecycle script ${CI_LIFECYCLE_LIB} not found!"
+  exit 1
+fi
+
+# Source CI lifecycle script to test validate_shutdown_logs directly
+. "${CI_LIFECYCLE_LIB}"
+
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
@@ -612,6 +621,136 @@ OUT20C=$(
   step6_worker_eval "${MOCK_PROC20C}" 7
 )
 assert_test "Scenario 20C: Standalone worker with mismatched PPID fails Step 6" 1 "validation failed" "$?" "${OUT20C}"
+
+# ------------------------------------------------------------------------------
+# Test 21: Valid Production Graceful Shutdown Log (Exit code 143 and 0)
+# ------------------------------------------------------------------------------
+echo "--- Scenario 21: Valid Production Graceful Shutdown Log ---"
+PROD_SHUTDOWN_LOG_SAMPLE=$(cat << 'EOF'
+=== [CONTAINER SUPERVISOR: WEB + BACKGROUND WORKER + BACKUP SCHEDULER] ===
+[SUPERVISOR-WORKER] Distributed lease held or maintenance active. Skipping cycle.
+[SUPERVISOR-STATE] Transitioned to QUIESCING
+[SUPERVISOR-STATE] Transitioned to DRAINING
+[SUPERVISOR-STATE] Transitioned to TERMINATING_CHILD
+[SUPERVISOR] Next.js process exited with code 143 / signal null.
+[SUPERVISOR] Web process exited cleanly with code 143.
+[SUPERVISOR-STATE] Transitioned to VERIFYING_PROCESS_EXIT
+[SUPERVISOR-STATE] Transitioned to CLEANING_OWNED_LEASES
+[SUPERVISOR-STATE] Transitioned to CHECKPOINTING
+[SUPERVISOR-WAL] Checkpoint successfully transferred frames and truncated WAL: log=0, checkpointed=0
+[SUPERVISOR-STATE] Transitioned to SHUTDOWN_COMPLETE
+[SUPERVISOR] Shutdown completed successfully. Final code: 143
+EOF
+)
+
+OUT21A=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" 143)
+assert_test "Scenario 21A: Valid production shutdown log with exit code 143 passes" 0 "PASS: Signal forwarding and graceful shutdown confirmed" "$?" "${OUT21A}"
+
+OUT21B=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" 0)
+assert_test "Scenario 21B: Valid production shutdown log with exit code 0 passes" 0 "PASS: Signal forwarding and graceful shutdown confirmed" "$?" "${OUT21B}"
+
+# ------------------------------------------------------------------------------
+# Test 22: Missing [SUPERVISOR-STATE] Transitioned to SHUTDOWN_COMPLETE
+# ------------------------------------------------------------------------------
+echo "--- Scenario 22: Missing Transition to SHUTDOWN_COMPLETE ---"
+LOG_NO_STATE_TRANSITION=$(echo "${PROD_SHUTDOWN_LOG_SAMPLE}" | grep -v "Transitioned to SHUTDOWN_COMPLETE")
+OUT22=""
+EC22=0
+OUT22=$(validate_shutdown_logs "${LOG_NO_STATE_TRANSITION}" 143 2>&1) || EC22=$?
+assert_test "Scenario 22: Missing transition to SHUTDOWN_COMPLETE rejected" 1 "missing explicit shutdown completion marker" "${EC22}" "${OUT22}"
+
+# ------------------------------------------------------------------------------
+# Test 23: Missing [SUPERVISOR] Shutdown completed successfully
+# ------------------------------------------------------------------------------
+echo "--- Scenario 23: Missing Successful Shutdown Message ---"
+LOG_NO_SUCCESS_MSG=$(echo "${PROD_SHUTDOWN_LOG_SAMPLE}" | grep -v "Shutdown completed successfully")
+OUT23=""
+EC23=0
+OUT23=$(validate_shutdown_logs "${LOG_NO_SUCCESS_MSG}" 143 2>&1) || EC23=$?
+assert_test "Scenario 23: Missing successful shutdown message rejected" 1 "missing successful shutdown message" "${EC23}" "${OUT23}"
+
+# ------------------------------------------------------------------------------
+# Test 24: Unexpected Container Exit Code (e.g. 137 SIGKILL, 1 error)
+# ------------------------------------------------------------------------------
+echo "--- Scenario 24: Unexpected Container Exit Code ---"
+OUT24A=""
+EC24A=0
+OUT24A=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" 137 2>&1) || EC24A=$?
+assert_test "Scenario 24A: Unexpected container exit code 137 rejected" 1 "Expected container exit code 0 or 143" "${EC24A}" "${OUT24A}"
+
+OUT24B=""
+EC24B=0
+OUT24B=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" 1 2>&1) || EC24B=$?
+assert_test "Scenario 24B: Unexpected container exit code 1 rejected" 1 "Expected container exit code 0 or 143" "${EC24B}" "${OUT24B}"
+
+OUT24C=""
+EC24C=0
+OUT24C=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" "" 2>&1) || EC24C=$?
+assert_test "Scenario 24C: Empty container exit code rejected" 1 "Container exit code is missing or empty" "${EC24C}" "${OUT24C}"
+
+OUT24D=""
+EC24D=0
+OUT24D=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" 2>&1) || EC24D=$?
+assert_test "Scenario 24D: Missing container exit code argument rejected" 1 "Container exit code is missing or empty" "${EC24D}" "${OUT24D}"
+
+OUT24E=""
+EC24E=0
+OUT24E=$(validate_shutdown_logs "${PROD_SHUTDOWN_LOG_SAMPLE}" "abc" 2>&1) || EC24E=$?
+assert_test "Scenario 24E: Malformed non-numeric container exit code rejected" 1 "Expected container exit code 0 or 143" "${EC24E}" "${OUT24E}"
+
+# ------------------------------------------------------------------------------
+# Test 25: Generic SIGTERM String Without Shutdown Markers
+# ------------------------------------------------------------------------------
+echo "--- Scenario 25: Generic SIGTERM String Without Shutdown Markers ---"
+GENERIC_SIGTERM_LOG="Container received SIGTERM. Exiting immediately."
+OUT25=""
+EC25=0
+OUT25=$(validate_shutdown_logs "${GENERIC_SIGTERM_LOG}" 143 2>&1) || EC25=$?
+assert_test "Scenario 25: Generic SIGTERM string without supervisor markers rejected" 1 "missing explicit shutdown completion marker" "${EC25}" "${OUT25}"
+
+# ------------------------------------------------------------------------------
+# Test 26: Missing [SUPERVISOR-WAL] Checkpoint Success Confirmation
+# ------------------------------------------------------------------------------
+echo "--- Scenario 26: Missing WAL Checkpoint Confirmation ---"
+LOG_NO_WAL=$(echo "${PROD_SHUTDOWN_LOG_SAMPLE}" | grep -v "Checkpoint successfully transferred frames")
+OUT26=""
+EC26=0
+OUT26=$(validate_shutdown_logs "${LOG_NO_WAL}" 143 2>&1) || EC26=$?
+assert_test "Scenario 26: Missing WAL checkpoint success confirmation rejected" 1 "missing WAL checkpoint success confirmation" "${EC26}" "${OUT26}"
+
+# ------------------------------------------------------------------------------
+# Test 27: Database WAL Size Post-Shutdown Invariant Check
+# ------------------------------------------------------------------------------
+echo "--- Scenario 27: Database WAL Size Post-Shutdown Invariant Check ---"
+eval_wal_size() {
+  local wal_file="$1"
+  if [ -f "${wal_file}" ]; then
+    local size
+    size=$(wc -c < "${wal_file}" | tr -d '[:space:]')
+    if [ "${size:-0}" -ne 0 ]; then
+      echo "FAIL: Expected WAL file size 0 bytes after TRUNCATE checkpoint, got ${size} bytes!"
+      return 1
+    fi
+  fi
+  echo "PASS: SQLite WAL checkpoint verified."
+  return 0
+}
+
+# 27A: 0-byte WAL file
+MOCK_WAL_EMPTY="${TEST_DIR}/empty.db-wal"
+touch "${MOCK_WAL_EMPTY}"
+OUT27A=""
+EC27A=0
+OUT27A=$(eval_wal_size "${MOCK_WAL_EMPTY}") || EC27A=$?
+assert_test "Scenario 27A: Zero-byte WAL checkpoint file passes" 0 "PASS: SQLite WAL checkpoint verified" "${EC27A}" "${OUT27A}"
+
+# 27B: Non-zero WAL file
+MOCK_WAL_DIRTY="${TEST_DIR}/dirty.db-wal"
+echo "dirty frames uncheckpointed" > "${MOCK_WAL_DIRTY}"
+OUT27B=""
+EC27B=0
+OUT27B=$(eval_wal_size "${MOCK_WAL_DIRTY}") || EC27B=$?
+assert_test "Scenario 27B: Non-zero-byte WAL checkpoint file rejected" 1 "Expected WAL file size 0 bytes" "${EC27B}" "${OUT27B}"
 
 echo "================================================================================"
 echo "Results: ${PASSED_TESTS} Passed, ${FAILED_TESTS} Failed"
