@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { sendEmailWithApproval } from '@/lib/email/inbox';
 import { getAuthenticatedUser } from '@/lib/auth';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: Request) {
   try {
     const authUser = await getAuthenticatedUser(req);

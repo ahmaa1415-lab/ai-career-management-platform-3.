@@ -70,6 +70,7 @@ export function initializeRecruitmentInbox(userId?: string) {
         const insert = db.prepare(`
           INSERT INTO emails (id, user_id, category, sender, recipient, subject, body, is_draft, is_sent)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO NOTHING
         `);
         db.transaction(() => {
           for (const e of seedEmails) {
@@ -80,6 +81,7 @@ export function initializeRecruitmentInbox(userId?: string) {
         const insert = db.prepare(`
           INSERT INTO emails (id, category, sender, recipient, subject, body, is_draft, is_sent)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO NOTHING
         `);
         db.transaction(() => {
           for (const e of seedEmails) {
@@ -92,14 +94,6 @@ export function initializeRecruitmentInbox(userId?: string) {
     if (err?.code === 'MAINTENANCE_MODE_ACTIVE') {
       return;
     }
-    throw err;
-  }
-}
-
-try {
-  initializeRecruitmentInbox();
-} catch (err: any) {
-  if (err?.code !== 'MAINTENANCE_MODE_ACTIVE') {
     throw err;
   }
 }
