@@ -154,18 +154,45 @@ if [[ "${CHILD_VAL_OUT}" != PASS* ]]; then
 fi
 
 # If a standalone background worker process is also present, verify its PPID strictly matches SUPERVISOR_PID
-WORKER_INFO=$(run_proc_discovery find-worker /proc | tr -d '\r')
-if [[ -n "${WORKER_INFO}" ]]; then
+WORKER_RAW=""
+WORKER_EC=0
+WORKER_RAW=$(run_proc_discovery find-worker /proc) || WORKER_EC=$?
+WORKER_INFO=$(echo "${WORKER_RAW}" | tr -d '\r')
+
+if [ "${WORKER_EC}" -eq 0 ]; then
+  # Option A: Standalone background worker process discovered
+  if [[ -z "${WORKER_INFO}" ]]; then
+    echo "FAIL: Background worker discovery returned exit code 0 but produced empty output!"
+    dump_proc_tree
+    exit 1
+  fi
   WORKER_PID=$(echo "${WORKER_INFO}" | awk '{print $1}')
   WORKER_PPID=$(echo "${WORKER_INFO}" | awk '{print $2}')
+  if [[ -z "${WORKER_PID}" || -z "${WORKER_PPID}" || "${WORKER_PID}" =~ [^0-9] || "${WORKER_PPID}" =~ [^0-9] ]]; then
+    echo "FAIL: Malformed background worker output: '${WORKER_INFO}'"
+    dump_proc_tree
+    exit 1
+  fi
   WORKER_VAL_OUT=$(run_proc_discovery validate-child-ppid "${WORKER_PID}" "${WORKER_PPID}" "${SUPERVISOR_PID}" | tr -d '\r')
   if [[ "${WORKER_VAL_OUT}" != PASS* ]]; then
     echo "FAIL: Standalone Worker PPID (${WORKER_PPID}) validation failed: ${WORKER_VAL_OUT}!"
+    dump_proc_tree
     exit 1
   fi
   echo "PASS: Standalone Background Worker (PID ${WORKER_PID}) is a verified child of Supervisor (PPID ${WORKER_PPID})."
-else
+elif [ "${WORKER_EC}" -eq 1 ]; then
+  # Option B: Documented exit code 1 indicates no matching standalone worker process in /proc
+  if [[ -n "${WORKER_INFO}" ]]; then
+    echo "FAIL: Background worker discovery returned exit code 1 but produced unexpected output: '${WORKER_INFO}'"
+    dump_proc_tree
+    exit 1
+  fi
   echo "INFO: Background worker is operating in integrated in-process mode within Supervisor PID ${SUPERVISOR_PID} (Option B)."
+else
+  # Unexpected failure (e.g., container error, script missing, unknown subcommand, syntax error)
+  echo "FAIL: Background worker discovery failed with unexpected exit code ${WORKER_EC}: '${WORKER_INFO}'"
+  dump_proc_tree
+  exit 1
 fi
 
 echo ">>> [7/12] Verifying Healthcheck Endpoint..."

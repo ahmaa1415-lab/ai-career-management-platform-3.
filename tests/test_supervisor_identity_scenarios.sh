@@ -395,6 +395,224 @@ OUT15C=$(
 )
 assert_test "Scenario 15C: Mismatched child PPID rejected" 1 "does not match Supervisor PID" "$?" "${OUT15C}"
 
+# ------------------------------------------------------------------------------
+# Test 16: Standalone Background Worker Found Successfully (Option A)
+# ------------------------------------------------------------------------------
+echo "--- Scenario 16: Standalone Background Worker Found (Option A) ---"
+MOCK_PROC16="${TEST_DIR}/proc16"
+mkdir -p "${MOCK_PROC16}"
+create_proc_entry "${MOCK_PROC16}" 7 1 1001 "node" "node\0scripts/start_all.mjs\0"
+create_proc_entry "${MOCK_PROC16}" 85 7 1001 "node" "node\0scripts/background_worker.mjs\0"
+
+OUT16=$(
+  worker_raw=""
+  worker_ec=0
+  worker_raw=$(find_background_worker "${MOCK_PROC16}") || worker_ec=$?
+  [ "${worker_ec}" -eq 0 ] || { echo "FAIL: Expected exit code 0, got ${worker_ec}"; exit 1; }
+  worker_info=$(echo "${worker_raw}" | tr -d '\r')
+  w_pid=$(echo "${worker_info}" | awk '{print $1}')
+  w_ppid=$(echo "${worker_info}" | awk '{print $2}')
+  [ "${w_pid}" = "85" ] || { echo "FAIL: Expected PID 85, got ${w_pid}"; exit 1; }
+  [ "${w_ppid}" = "7" ] || { echo "FAIL: Expected PPID 7, got ${w_ppid}"; exit 1; }
+  echo "PASS: Standalone worker discovered PID ${w_pid} PPID ${w_ppid}"
+)
+assert_test "Scenario 16: Standalone Background Worker discovered with exit code 0" 0 "PASS: Standalone worker discovered" "$?" "${OUT16}"
+
+# ------------------------------------------------------------------------------
+# Test 17: No Standalone Worker (Option B Fallback)
+# ------------------------------------------------------------------------------
+echo "--- Scenario 17: No Standalone Worker (Option B Fallback) ---"
+MOCK_PROC17="${TEST_DIR}/proc17"
+mkdir -p "${MOCK_PROC17}"
+create_proc_entry "${MOCK_PROC17}" 7 1 1001 "node" "node\0scripts/start_all.mjs\0"
+create_proc_entry "${MOCK_PROC17}" 80 7 1001 "next-server" "node\0next\0start\0"
+
+OUT17=$(
+  worker_raw=""
+  worker_ec=0
+  worker_raw=$(find_background_worker "${MOCK_PROC17}") || worker_ec=$?
+  worker_info=$(echo "${worker_raw}" | tr -d '\r')
+  if [ "${worker_ec}" -eq 1 ] && [ -z "${worker_info}" ]; then
+    echo "INFO: Background worker is operating in integrated in-process mode within Supervisor PID 7 (Option B)."
+  else
+    echo "FAIL: Unexpected worker result: ec=${worker_ec} info='${worker_info}'"
+    exit 1
+  fi
+)
+assert_test "Scenario 17: No standalone worker cleanly falls back to Option B with exit code 1" 0 "Option B" "$?" "${OUT17}"
+
+# ------------------------------------------------------------------------------
+# Test 18: Discovery Command Returns Unexpected Error
+# ------------------------------------------------------------------------------
+echo "--- Scenario 18: Discovery Command Returns Unexpected Error ---"
+# 18A: CLI invocation with unknown subcommand
+OUT18A=$(
+  err_raw=""
+  err_ec=0
+  err_raw=$(sh "${PROD_LIB}" unknown-subcommand 2>&1) || err_ec=$?
+  if [ "${err_ec}" -ne 0 ] && echo "${err_raw}" | grep -q "Unknown or missing subcommand"; then
+    echo "PASS: Unknown subcommand rejected with non-zero exit code ${err_ec}"
+  else
+    echo "FAIL: Expected error for unknown subcommand, got ec=${err_ec} out='${err_raw}'"
+    exit 1
+  fi
+)
+assert_test "Scenario 18A: Unknown subcommand produces error and non-zero exit code" 0 "PASS: Unknown subcommand rejected" "$?" "${OUT18A}"
+
+# 18B: CI handler classification of unexpected non-zero exit code (e.g. 2, 127)
+OUT18B=$(
+  mock_runner() {
+    return 127
+  }
+  w_raw=""
+  w_ec=0
+  w_raw=$(mock_runner) || w_ec=$?
+  w_info=$(echo "${w_raw}" | tr -d '\r')
+  if [ "${w_ec}" -eq 0 ]; then
+    echo "FAIL: treated as success"
+    exit 1
+  elif [ "${w_ec}" -eq 1 ]; then
+    echo "FAIL: treated as Option B"
+    exit 1
+  else
+    echo "FAIL: Background worker discovery failed with unexpected exit code ${w_ec}: '${w_info}'"
+    exit 1
+  fi
+)
+assert_test "Scenario 18B: Unexpected exit code 127 fails CI and does not trigger Option B" 1 "unexpected exit code 127" "$?" "${OUT18B}"
+
+# ------------------------------------------------------------------------------
+# Test 19: Empty or Malformed Worker Output Validation
+# ------------------------------------------------------------------------------
+echo "--- Scenario 19: Empty or Malformed Worker Output Validation ---"
+# 19A: Exit code 0 but empty output
+OUT19A=$(
+  mock_runner() {
+    return 0
+  }
+  w_raw=""
+  w_ec=0
+  w_raw=$(mock_runner) || w_ec=$?
+  w_info=$(echo "${w_raw}" | tr -d '\r')
+  if [ "${w_ec}" -eq 0 ]; then
+    if [[ -z "${w_info}" ]]; then
+      echo "FAIL: Background worker discovery returned exit code 0 but produced empty output!"
+      exit 1
+    fi
+  fi
+)
+assert_test "Scenario 19A: Exit code 0 with empty output rejected" 1 "empty output" "$?" "${OUT19A}"
+
+# 19B: Exit code 0 but malformed output (non-numeric PID or single token)
+OUT19B=$(
+  mock_runner() {
+    echo "invalid_pid not_a_number"
+    return 0
+  }
+  w_raw=""
+  w_ec=0
+  w_raw=$(mock_runner) || w_ec=$?
+  w_info=$(echo "${w_raw}" | tr -d '\r')
+  if [ "${w_ec}" -eq 0 ]; then
+    w_pid=$(echo "${w_info}" | awk '{print $1}')
+    w_ppid=$(echo "${w_info}" | awk '{print $2}')
+    if [[ -z "${w_pid}" || -z "${w_ppid}" || "${w_pid}" =~ [^0-9] || "${w_ppid}" =~ [^0-9] ]]; then
+      echo "FAIL: Malformed background worker output: '${w_info}'"
+      exit 1
+    fi
+  fi
+)
+assert_test "Scenario 19B: Exit code 0 with malformed output rejected" 1 "Malformed background worker output" "$?" "${OUT19B}"
+
+# 19C: Exit code 1 but unexpected output on stdout
+OUT19C=$(
+  mock_runner() {
+    echo "error_message_leaked"
+    return 1
+  }
+  w_raw=""
+  w_ec=0
+  w_raw=$(mock_runner) || w_ec=$?
+  w_info=$(echo "${w_raw}" | tr -d '\r')
+  if [ "${w_ec}" -eq 1 ]; then
+    if [[ -n "${w_info}" ]]; then
+      echo "FAIL: Background worker discovery returned exit code 1 but produced unexpected output: '${w_info}'"
+      exit 1
+    fi
+  fi
+)
+assert_test "Scenario 19C: Exit code 1 with unexpected stdout output rejected" 1 "unexpected output" "$?" "${OUT19C}"
+
+# ------------------------------------------------------------------------------
+# Test 20: Full Step 6 Workflow Integration Simulation
+# ------------------------------------------------------------------------------
+echo "--- Scenario 20: Full Step 6 Workflow Integration Simulation ---"
+step6_worker_eval() {
+  local mock_proc="$1"
+  local supervisor_pid="$2"
+
+  local worker_raw=""
+  local worker_ec=0
+  worker_raw=$(find_background_worker "${mock_proc}") || worker_ec=$?
+  local worker_info
+  worker_info=$(echo "${worker_raw}" | tr -d '\r')
+
+  if [ "${worker_ec}" -eq 0 ]; then
+    if [[ -z "${worker_info}" ]]; then
+      echo "FAIL: Background worker discovery returned exit code 0 but produced empty output!"
+      return 1
+    fi
+    local worker_pid worker_ppid
+    worker_pid=$(echo "${worker_info}" | awk '{print $1}')
+    worker_ppid=$(echo "${worker_info}" | awk '{print $2}')
+    if [[ -z "${worker_pid}" || -z "${worker_ppid}" || "${worker_pid}" =~ [^0-9] || "${worker_ppid}" =~ [^0-9] ]]; then
+      echo "FAIL: Malformed background worker output: '${worker_info}'"
+      return 1
+    fi
+    local worker_val_out
+    worker_val_out=$(validate_child_ppid "${worker_pid}" "${worker_ppid}" "${supervisor_pid}" | tr -d '\r')
+    if [[ "${worker_val_out}" != PASS* ]]; then
+      echo "FAIL: Standalone Worker PPID (${worker_ppid}) validation failed: ${worker_val_out}!"
+      return 1
+    fi
+    echo "PASS: Standalone Background Worker (PID ${worker_pid}) is a verified child of Supervisor (PPID ${worker_ppid})."
+    return 0
+  elif [ "${worker_ec}" -eq 1 ]; then
+    if [[ -n "${worker_info}" ]]; then
+      echo "FAIL: Background worker discovery returned exit code 1 but produced unexpected output: '${worker_info}'"
+      return 1
+    fi
+    echo "INFO: Background worker is operating in integrated in-process mode within Supervisor PID ${supervisor_pid} (Option B)."
+    return 0
+  else
+    echo "FAIL: Background worker discovery failed with unexpected exit code ${worker_ec}: '${worker_info}'"
+    return 1
+  fi
+}
+
+# 20A: Option A fixture succeeds
+OUT20A=$(
+  step6_worker_eval "${MOCK_PROC16}" 7
+)
+assert_test "Scenario 20A: Full Step 6 handles Option A standalone worker" 0 "PASS: Standalone Background Worker" "$?" "${OUT20A}"
+
+# 20B: Option B fixture succeeds
+OUT20B=$(
+  step6_worker_eval "${MOCK_PROC17}" 7
+)
+assert_test "Scenario 20B: Full Step 6 handles Option B integrated worker" 0 "INFO: Background worker is operating in integrated in-process mode" "$?" "${OUT20B}"
+
+# 20C: Standalone worker with wrong PPID fails validation
+MOCK_PROC20C="${TEST_DIR}/proc20c"
+mkdir -p "${MOCK_PROC20C}"
+create_proc_entry "${MOCK_PROC20C}" 7 1 1001 "node" "node\0scripts/start_all.mjs\0"
+create_proc_entry "${MOCK_PROC20C}" 95 999 1001 "node" "node\0scripts/background_worker.mjs\0"
+
+OUT20C=$(
+  step6_worker_eval "${MOCK_PROC20C}" 7
+)
+assert_test "Scenario 20C: Standalone worker with mismatched PPID fails Step 6" 1 "validation failed" "$?" "${OUT20C}"
+
 echo "================================================================================"
 echo "Results: ${PASSED_TESTS} Passed, ${FAILED_TESTS} Failed"
 echo "================================================================================"
