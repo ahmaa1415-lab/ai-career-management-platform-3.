@@ -15,8 +15,13 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { runEmailUserIdMigration, EMAIL_USER_ID_MIGRATION_ID, MigrationResult } from '../lib/migrations';
-import { isMaintenanceFullyActive, isMaintenanceActive } from '../lib/maintenance';
-import { getActiveLeasesCount, deactivateCrossProcessMaintenance, requestMaintenanceDrainSync } from '../lib/coordination';
+import {
+  getActiveLeasesCount,
+  deactivateCrossProcessMaintenance,
+  requestMaintenanceDrainSync,
+  isCrossProcessFullyActive,
+  isCrossProcessMaintenanceActive
+} from '../lib/coordination';
 import { SQLiteBackupManager } from './backup_manager.mjs';
 
 // ==============================================================================
@@ -86,7 +91,7 @@ export function validateEnvironmentAndSafeguards(): { dbPath: string; isDryRun: 
   // 5. Maintenance Mode Quiescence Check
   const bypassMaintenance = process.env.BYPASS_MAINTENANCE_CHECK === 'true';
   if (!bypassMaintenance && !isDryRun) {
-    if (!isMaintenanceFullyActive(resolvedPath)) {
+    if (!isCrossProcessFullyActive(resolvedPath)) {
       throw new Error(
         'FATAL SAFEGUARD: Database is not in verified ACTIVE maintenance mode. ' +
         'Execute "node scripts/maintenance_control.mjs --enable" to drain writes before applying migration.'
@@ -157,7 +162,7 @@ export function executeMigrationCli(customDbPath?: string): MigrationResult {
     }
 
     // 4. Capture data_version and create dedicated pre-migration backup before acquiring transaction lock
-    if (!isMaintenanceActive(dbPath)) {
+    if (!isCrossProcessMaintenanceActive(dbPath)) {
       requestMaintenanceDrainSync({ customDbPath: dbPath, reason: 'migration_preflight' });
     }
 

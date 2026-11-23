@@ -1,268 +1,7 @@
 #!/usr/bin/env node
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res, err) => function __init() {
-  if (err) throw err[0];
-  try {
-    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-  } catch (e) {
-    throw err = [e], e;
-  }
-};
-
-// lib/coordination.ts
-import Database from "better-sqlite3";
-import path2 from "path";
-import fs2 from "fs";
-function getCoordinationDbPath(customDbPath) {
-  const dbPath = customDbPath || process.env.MIGRATION_DATABASE_PATH || process.env.DATABASE_PATH || path2.join(process.cwd(), "data", "career_app.db");
-  return path2.join(path2.dirname(dbPath), COORDINATION_DB_FILENAME);
-}
-function getCoordinationDb(customDbPath) {
-  const cdbPath = getCoordinationDbPath(customDbPath);
-  const existing = cdbCache.get(cdbPath);
-  if (existing && existing.open) {
-    return existing;
-  }
-  const cdbDir = path2.dirname(cdbPath);
-  if (!fs2.existsSync(cdbDir)) {
-    fs2.mkdirSync(cdbDir, { recursive: true });
-  }
-  const cdb = new Database(cdbPath, { timeout: 1e4 });
-  cdb.pragma("journal_mode = WAL");
-  cdb.pragma("busy_timeout = 10000");
-  cdb.pragma("synchronous = NORMAL");
-  cdb.exec(`
-    CREATE TABLE IF NOT EXISTS coordination_state (
-      id TEXT PRIMARY KEY,
-      state TEXT NOT NULL,
-      reason TEXT,
-      operator TEXT,
-      initiated_at TEXT,
-      activated_at TEXT,
-      version INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS active_leases (
-      lease_id TEXT PRIMARY KEY,
-      process_type TEXT NOT NULL,
-      pid INTEGER NOT NULL,
-      label TEXT NOT NULL,
-      acquired_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS durable_audit_spool (
-      id TEXT PRIMARY KEY,
-      action TEXT NOT NULL,
-      details TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      flushed_at TEXT,
-      status TEXT NOT NULL DEFAULT 'PENDING'
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_active_leases_expires ON active_leases(expires_at);
-    CREATE INDEX IF NOT EXISTS idx_durable_audit_status ON durable_audit_spool(status);
-  `);
-  cdbCache.set(cdbPath, cdb);
-  return cdb;
-}
-function purgeExpiredLeases(customDbPath) {
-  try {
-    const cdb = getCoordinationDb(customDbPath);
-    const now = Date.now();
-    const res = cdb.prepare("DELETE FROM active_leases WHERE expires_at <= ?").run(now);
-    return res.changes;
-  } catch {
-    return 0;
-  }
-}
-function getCrossProcessState(customDbPath) {
-  if (process.env.MAINTENANCE_MODE === "true") {
-    return {
-      state: "ACTIVE",
-      details: {
-        id: "global",
-        state: "ACTIVE",
-        reason: "MAINTENANCE_MODE environment variable override",
-        operator: "system_env",
-        initiated_at: (/* @__PURE__ */ new Date()).toISOString(),
-        activated_at: (/* @__PURE__ */ new Date()).toISOString(),
-        version: 1
-      }
-    };
-  }
-  try {
-    const lockPath = path2.join(path2.dirname(getCoordinationDbPath(customDbPath)), MAINTENANCE_LOCK_FILENAME);
-    if (fs2.existsSync(lockPath)) {
-      try {
-        const fileData = JSON.parse(fs2.readFileSync(lockPath, "utf-8"));
-        if (fileData.state === "DRAINING" || fileData.state === "ACTIVE") {
-          return {
-            state: fileData.state,
-            details: {
-              id: "global",
-              state: fileData.state,
-              reason: fileData.reason || "Legacy lockfile sentinel",
-              operator: fileData.operator || "file_sentinel",
-              initiated_at: fileData.initiatedAt || (/* @__PURE__ */ new Date()).toISOString(),
-              version: 1
-            }
-          };
-        }
-      } catch {
-        return {
-          state: "ACTIVE",
-          details: null
-        };
-      }
-    }
-    const cdb = getCoordinationDb(customDbPath);
-    const row = cdb.prepare("SELECT * FROM coordination_state WHERE id = 'global'").get();
-    if (!row) {
-      return { state: "INACTIVE", details: null };
-    }
-    return {
-      state: row.state,
-      details: row
-    };
-  } catch (err) {
-    console.error("[COORDINATION CRITICAL] Error reading coordination state. Failing closed:", err?.message);
-    return {
-      state: "ACTIVE",
-      details: null
-    };
-  }
-}
-function isCrossProcessMaintenanceActive(customDbPath) {
-  const { state } = getCrossProcessState(customDbPath);
-  return state === "DRAINING" || state === "ACTIVE";
-}
-function isCrossProcessFullyActive(customDbPath) {
-  return getCrossProcessState(customDbPath).state === "ACTIVE";
-}
-function acquireCrossProcessWriteLease(options) {
-  const customDbPath = options.customDbPath;
-  const { state } = getCrossProcessState(customDbPath);
-  if (state !== "INACTIVE") {
-    throw new MaintenanceActiveError(`Write rejected: cross-process maintenance state is ${state} (${options.label})`);
-  }
-  const cdb = getCoordinationDb(customDbPath);
-  const leaseId = `lease_${process.pid}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const now = Date.now();
-  const ttlMs = options.ttlMs || DEFAULT_LEASE_TTL_MS;
-  const expiresAt = now + ttlMs;
-  cdb.prepare(`
-    INSERT INTO active_leases (lease_id, process_type, pid, label, acquired_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(leaseId, options.processType, process.pid, options.label, now, expiresAt);
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    try {
-      cdb.prepare("DELETE FROM active_leases WHERE lease_id = ?").run(leaseId);
-    } catch {
-    }
-  };
-  return { leaseId, release };
-}
-function getActiveLeasesCount(customDbPath) {
-  try {
-    purgeExpiredLeases(customDbPath);
-    const cdb = getCoordinationDb(customDbPath);
-    const row = cdb.prepare("SELECT COUNT(*) as c FROM active_leases WHERE expires_at > ?").get(Date.now());
-    return row?.c || 0;
-  } catch {
-    return 0;
-  }
-}
-function getActiveLeases(customDbPath) {
-  try {
-    purgeExpiredLeases(customDbPath);
-    const cdb = getCoordinationDb(customDbPath);
-    return cdb.prepare("SELECT * FROM active_leases WHERE expires_at > ?").all(Date.now());
-  } catch {
-    return [];
-  }
-}
-function requestMaintenanceDrainSync(options = {}) {
-  const customDbPath = options.customDbPath;
-  const cdb = getCoordinationDb(customDbPath);
-  const reason = options.reason || "Scheduled database schema migration";
-  const operator = options.operator || process.env.USER || process.env.USERNAME || "railway_operator";
-  const existing = cdb.prepare("SELECT * FROM coordination_state WHERE id = 'global'").get();
-  if (existing && existing.state === "ACTIVE") {
-    return { success: true, state: "ACTIVE" };
-  }
-  purgeExpiredLeases(customDbPath);
-  const leaseCount = getActiveLeasesCount(customDbPath);
-  if (leaseCount > 0) {
-    throw new MaintenanceDrainTimeoutError(`Cannot synchronize maintenance drain synchronously: ${leaseCount} in-flight leases remain.`);
-  }
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  cdb.prepare(`
-    INSERT INTO coordination_state (id, state, reason, operator, initiated_at, activated_at, version)
-    VALUES ('global', 'ACTIVE', ?, ?, ?, ?, 1)
-    ON CONFLICT(id) DO UPDATE SET
-      state = 'ACTIVE',
-      reason = excluded.reason,
-      operator = excluded.operator,
-      initiated_at = excluded.initiated_at,
-      activated_at = excluded.activated_at,
-      version = coordination_state.version + 1
-  `).run(reason, operator, now, now);
-  const lockPath = path2.join(path2.dirname(getCoordinationDbPath(customDbPath)), MAINTENANCE_LOCK_FILENAME);
-  try {
-    fs2.writeFileSync(lockPath, JSON.stringify({ state: "ACTIVE", reason, operator, activatedAt: now }, null, 2), "utf-8");
-  } catch {
-  }
-  console.log("[COORDINATION] Synchronous drain verified (0 writers). State is ACTIVE.");
-  return { success: true, state: "ACTIVE" };
-}
-function deactivateCrossProcessMaintenance(customDbPath) {
-  const cdb = getCoordinationDb(customDbPath);
-  cdb.prepare(`
-    INSERT INTO coordination_state (id, state, reason, operator, version)
-    VALUES ('global', 'INACTIVE', 'Maintenance completed', 'system', 1)
-    ON CONFLICT(id) DO UPDATE SET
-      state = 'INACTIVE',
-      activated_at = NULL,
-      version = coordination_state.version + 1
-  `).run();
-  const lockPath = path2.join(path2.dirname(getCoordinationDbPath(customDbPath)), MAINTENANCE_LOCK_FILENAME);
-  try {
-    if (fs2.existsSync(lockPath)) fs2.unlinkSync(lockPath);
-  } catch {
-  }
-  console.log("[COORDINATION] Cross-process maintenance deactivated. State is INACTIVE.");
-}
-var COORDINATION_DB_FILENAME, MAINTENANCE_LOCK_FILENAME, DEFAULT_LEASE_TTL_MS, MaintenanceActiveError, MaintenanceDrainTimeoutError, cdbCache;
-var init_coordination = __esm({
-  "lib/coordination.ts"() {
-    "use strict";
-    COORDINATION_DB_FILENAME = ".coordination.db";
-    MAINTENANCE_LOCK_FILENAME = ".maintenance_lock";
-    DEFAULT_LEASE_TTL_MS = 1e4;
-    MaintenanceActiveError = class extends Error {
-      code = "MAINTENANCE_MODE_ACTIVE";
-      constructor(message = "Database write rejected: maintenance mode is active or draining.") {
-        super(message);
-        this.name = "MaintenanceActiveError";
-      }
-    };
-    MaintenanceDrainTimeoutError = class extends Error {
-      code = "MAINTENANCE_DRAIN_TIMEOUT";
-      constructor(message = "Failed to achieve write quiescence across processes within timeout.") {
-        super(message);
-        this.name = "MaintenanceDrainTimeoutError";
-      }
-    };
-    cdbCache = /* @__PURE__ */ new Map();
-  }
-});
 
 // scripts/run_email_migration.ts
-import Database4 from "better-sqlite3";
+import Database3 from "better-sqlite3";
 import fs4 from "fs";
 import path4 from "path";
 
@@ -426,62 +165,211 @@ function runEmailUserIdMigration(db, options) {
   }
 }
 
-// lib/maintenance.ts
-init_coordination();
-import Database2 from "better-sqlite3";
-import { NextResponse } from "next/server";
-var WriteBarrierRegistryAdapter = class {
-  lastCustomDbPath;
-  getActiveCount(customDbPath) {
-    return getActiveLeasesCount(customDbPath || this.lastCustomDbPath);
-  }
-  getActiveOperations(customDbPath) {
-    const leases = getActiveLeases(customDbPath || this.lastCustomDbPath);
-    const now = Date.now();
-    return leases.map((l) => ({
-      id: l.lease_id,
-      label: l.label,
-      durationMs: now - l.acquired_at
-    }));
-  }
-  enter(label, customDbPath) {
-    if (customDbPath) this.lastCustomDbPath = customDbPath;
-    return acquireCrossProcessWriteLease({
-      processType: "web",
-      label,
-      customDbPath: customDbPath || this.lastCustomDbPath
-    });
-  }
-  async awaitDrain(timeoutMs = 1e4, customDbPath) {
-    const targetDbPath = customDbPath || this.lastCustomDbPath;
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (getActiveLeasesCount(targetDbPath) === 0) return true;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    return getActiveLeasesCount(targetDbPath) === 0;
-  }
-  reset() {
-    try {
-      const cdb = getCoordinationDb(this.lastCustomDbPath);
-      cdb.prepare("DELETE FROM active_leases WHERE pid = ?").run(process.pid);
-    } catch {
-    }
+// lib/coordination.ts
+import Database from "better-sqlite3";
+import path2 from "path";
+import fs2 from "fs";
+var COORDINATION_DB_FILENAME = ".coordination.db";
+var MAINTENANCE_LOCK_FILENAME = ".maintenance_lock";
+var MaintenanceDrainTimeoutError = class extends Error {
+  code = "MAINTENANCE_DRAIN_TIMEOUT";
+  constructor(message = "Failed to achieve write quiescence across processes within timeout.") {
+    super(message);
+    this.name = "MaintenanceDrainTimeoutError";
   }
 };
-var writeRegistry = new WriteBarrierRegistryAdapter();
-function isMaintenanceActive(customDbPath) {
-  return isCrossProcessMaintenanceActive(customDbPath);
+var cdbCache = /* @__PURE__ */ new Map();
+function getCoordinationDbPath(customDbPath) {
+  const dbPath = customDbPath || process.env.MIGRATION_DATABASE_PATH || process.env.DATABASE_PATH || path2.join(process.cwd(), "data", "career_app.db");
+  return path2.join(path2.dirname(dbPath), COORDINATION_DB_FILENAME);
 }
-function isMaintenanceFullyActive(customDbPath) {
-  return isCrossProcessFullyActive(customDbPath);
-}
+function getCoordinationDb(customDbPath) {
+  const cdbPath = getCoordinationDbPath(customDbPath);
+  const existing = cdbCache.get(cdbPath);
+  if (existing && existing.open) {
+    return existing;
+  }
+  const cdbDir = path2.dirname(cdbPath);
+  if (!fs2.existsSync(cdbDir)) {
+    fs2.mkdirSync(cdbDir, { recursive: true });
+  }
+  const cdb = new Database(cdbPath, { timeout: 1e4 });
+  cdb.pragma("journal_mode = WAL");
+  cdb.pragma("busy_timeout = 10000");
+  cdb.pragma("synchronous = NORMAL");
+  cdb.exec(`
+    CREATE TABLE IF NOT EXISTS coordination_state (
+      id TEXT PRIMARY KEY,
+      state TEXT NOT NULL,
+      reason TEXT,
+      operator TEXT,
+      initiated_at TEXT,
+      activated_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1
+    );
 
-// scripts/run_email_migration.ts
-init_coordination();
+    CREATE TABLE IF NOT EXISTS active_leases (
+      lease_id TEXT PRIMARY KEY,
+      process_type TEXT NOT NULL,
+      pid INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      acquired_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS durable_audit_spool (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      details TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      flushed_at TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_active_leases_expires ON active_leases(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_durable_audit_status ON durable_audit_spool(status);
+  `);
+  cdbCache.set(cdbPath, cdb);
+  return cdb;
+}
+function purgeExpiredLeases(customDbPath) {
+  try {
+    const cdb = getCoordinationDb(customDbPath);
+    const now = Date.now();
+    const res = cdb.prepare("DELETE FROM active_leases WHERE expires_at <= ?").run(now);
+    return res.changes;
+  } catch {
+    return 0;
+  }
+}
+function getCrossProcessState(customDbPath) {
+  if (process.env.MAINTENANCE_MODE === "true") {
+    return {
+      state: "ACTIVE",
+      details: {
+        id: "global",
+        state: "ACTIVE",
+        reason: "MAINTENANCE_MODE environment variable override",
+        operator: "system_env",
+        initiated_at: (/* @__PURE__ */ new Date()).toISOString(),
+        activated_at: (/* @__PURE__ */ new Date()).toISOString(),
+        version: 1
+      }
+    };
+  }
+  try {
+    const lockPath = path2.join(path2.dirname(getCoordinationDbPath(customDbPath)), MAINTENANCE_LOCK_FILENAME);
+    if (fs2.existsSync(lockPath)) {
+      try {
+        const fileData = JSON.parse(fs2.readFileSync(lockPath, "utf-8"));
+        if (fileData.state === "DRAINING" || fileData.state === "ACTIVE") {
+          return {
+            state: fileData.state,
+            details: {
+              id: "global",
+              state: fileData.state,
+              reason: fileData.reason || "Legacy lockfile sentinel",
+              operator: fileData.operator || "file_sentinel",
+              initiated_at: fileData.initiatedAt || (/* @__PURE__ */ new Date()).toISOString(),
+              version: 1
+            }
+          };
+        }
+      } catch {
+        return {
+          state: "ACTIVE",
+          details: null
+        };
+      }
+    }
+    const cdb = getCoordinationDb(customDbPath);
+    const row = cdb.prepare("SELECT * FROM coordination_state WHERE id = 'global'").get();
+    if (!row) {
+      return { state: "INACTIVE", details: null };
+    }
+    return {
+      state: row.state,
+      details: row
+    };
+  } catch (err) {
+    console.error("[COORDINATION CRITICAL] Error reading coordination state. Failing closed:", err?.message);
+    return {
+      state: "ACTIVE",
+      details: null
+    };
+  }
+}
+function isCrossProcessMaintenanceActive(customDbPath) {
+  const { state } = getCrossProcessState(customDbPath);
+  return state === "DRAINING" || state === "ACTIVE";
+}
+function isCrossProcessFullyActive(customDbPath) {
+  return getCrossProcessState(customDbPath).state === "ACTIVE";
+}
+function getActiveLeasesCount(customDbPath) {
+  try {
+    purgeExpiredLeases(customDbPath);
+    const cdb = getCoordinationDb(customDbPath);
+    const row = cdb.prepare("SELECT COUNT(*) as c FROM active_leases WHERE expires_at > ?").get(Date.now());
+    return row?.c || 0;
+  } catch {
+    return 0;
+  }
+}
+function requestMaintenanceDrainSync(options = {}) {
+  const customDbPath = options.customDbPath;
+  const cdb = getCoordinationDb(customDbPath);
+  const reason = options.reason || "Scheduled database schema migration";
+  const operator = options.operator || process.env.USER || process.env.USERNAME || "railway_operator";
+  const existing = cdb.prepare("SELECT * FROM coordination_state WHERE id = 'global'").get();
+  if (existing && existing.state === "ACTIVE") {
+    return { success: true, state: "ACTIVE" };
+  }
+  purgeExpiredLeases(customDbPath);
+  const leaseCount = getActiveLeasesCount(customDbPath);
+  if (leaseCount > 0) {
+    throw new MaintenanceDrainTimeoutError(`Cannot synchronize maintenance drain synchronously: ${leaseCount} in-flight leases remain.`);
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  cdb.prepare(`
+    INSERT INTO coordination_state (id, state, reason, operator, initiated_at, activated_at, version)
+    VALUES ('global', 'ACTIVE', ?, ?, ?, ?, 1)
+    ON CONFLICT(id) DO UPDATE SET
+      state = 'ACTIVE',
+      reason = excluded.reason,
+      operator = excluded.operator,
+      initiated_at = excluded.initiated_at,
+      activated_at = excluded.activated_at,
+      version = coordination_state.version + 1
+  `).run(reason, operator, now, now);
+  const lockPath = path2.join(path2.dirname(getCoordinationDbPath(customDbPath)), MAINTENANCE_LOCK_FILENAME);
+  try {
+    fs2.writeFileSync(lockPath, JSON.stringify({ state: "ACTIVE", reason, operator, activatedAt: now }, null, 2), "utf-8");
+  } catch {
+  }
+  console.log("[COORDINATION] Synchronous drain verified (0 writers). State is ACTIVE.");
+  return { success: true, state: "ACTIVE" };
+}
+function deactivateCrossProcessMaintenance(customDbPath) {
+  const cdb = getCoordinationDb(customDbPath);
+  cdb.prepare(`
+    INSERT INTO coordination_state (id, state, reason, operator, version)
+    VALUES ('global', 'INACTIVE', 'Maintenance completed', 'system', 1)
+    ON CONFLICT(id) DO UPDATE SET
+      state = 'INACTIVE',
+      activated_at = NULL,
+      version = coordination_state.version + 1
+  `).run();
+  const lockPath = path2.join(path2.dirname(getCoordinationDbPath(customDbPath)), MAINTENANCE_LOCK_FILENAME);
+  try {
+    if (fs2.existsSync(lockPath)) fs2.unlinkSync(lockPath);
+  } catch {
+  }
+  console.log("[COORDINATION] Cross-process maintenance deactivated. State is INACTIVE.");
+}
 
 // scripts/backup_manager.mjs
-import Database3 from "better-sqlite3";
+import Database2 from "better-sqlite3";
 import fs3 from "fs";
 import path3 from "path";
 import crypto2 from "crypto";
@@ -505,7 +393,7 @@ var SQLiteBackupManager = class {
     }
     if (fs3.existsSync(coordinationDbPath)) {
       try {
-        const cdb = new Database3(coordinationDbPath, { timeout: 3e3 });
+        const cdb = new Database2(coordinationDbPath, { timeout: 3e3 });
         const row = cdb.prepare("SELECT state FROM coordination_state WHERE id = 'global'").get();
         cdb.close();
         if (row && (row.state === "DRAINING" || row.state === "ACTIVE")) {
@@ -521,7 +409,7 @@ var SQLiteBackupManager = class {
     const backupLeaseId = `backup_${process.pid}_${Date.now()}`;
     if (fs3.existsSync(coordinationDbPath)) {
       try {
-        const cdb = new Database3(coordinationDbPath, { timeout: 3e3 });
+        const cdb = new Database2(coordinationDbPath, { timeout: 3e3 });
         const now = Date.now();
         cdb.prepare(`
           INSERT INTO active_leases (lease_id, process_type, pid, label, acquired_at, expires_at)
@@ -531,14 +419,14 @@ var SQLiteBackupManager = class {
       } catch {
       }
     }
-    const sourceDb = new Database3(sourceDbPath);
+    const sourceDb = new Database2(sourceDbPath);
     try {
       sourceDb.exec(`VACUUM INTO '${backupFilePath.replace(/\\/g, "/")}'`);
     } finally {
       sourceDb.close();
       if (fs3.existsSync(coordinationDbPath)) {
         try {
-          const cdb = new Database3(coordinationDbPath, { timeout: 3e3 });
+          const cdb = new Database2(coordinationDbPath, { timeout: 3e3 });
           cdb.prepare("DELETE FROM active_leases WHERE lease_id = ?").run(backupLeaseId);
           cdb.close();
         } catch {
@@ -578,7 +466,7 @@ var SQLiteBackupManager = class {
     let state = "INACTIVE";
     let activeLeases = 0;
     if (fs3.existsSync(coordinationDbPath)) {
-      const cdb = new Database3(coordinationDbPath, { timeout: 3e3 });
+      const cdb = new Database2(coordinationDbPath, { timeout: 3e3 });
       try {
         const stateRow = cdb.prepare("SELECT state FROM coordination_state WHERE id = 'global'").get();
         if (stateRow) state = stateRow.state;
@@ -594,7 +482,7 @@ var SQLiteBackupManager = class {
     if (activeLeases > 0) {
       throw new Error(`[PRE_MIGRATION_BACKUP_REJECTED] Cannot create pre-migration backup while ${activeLeases} active write leases remain in-flight.`);
     }
-    const sourceDb = callerDb || new Database3(sourceDbPath, { timeout: 15e3 });
+    const sourceDb = callerDb || new Database2(sourceDbPath, { timeout: 15e3 });
     const ownConnection = !callerDb;
     try {
       const dataVersion = sourceDb.pragma("data_version", { simple: true });
@@ -610,7 +498,7 @@ var SQLiteBackupManager = class {
         fs3.rmSync(backupFilePath, { force: true });
         throw new Error(`Pre-migration backup integrity check failed for: ${backupFilePath}`);
       }
-      const testDb = new Database3(backupFilePath, { readonly: true });
+      const testDb = new Database2(backupFilePath, { readonly: true });
       let fkViolationsCount = 0;
       try {
         const fkViolations = testDb.pragma("foreign_key_check");
@@ -693,7 +581,7 @@ var SQLiteBackupManager = class {
    */
   static verifyIntegrity(dbFilePath) {
     if (!fs3.existsSync(dbFilePath)) return false;
-    const testDb = new Database3(dbFilePath, { readonly: true });
+    const testDb = new Database2(dbFilePath, { readonly: true });
     try {
       const result = testDb.pragma("integrity_check");
       return Array.isArray(result) && result.length === 1 && result[0].integrity_check === "ok";
@@ -760,7 +648,7 @@ var SQLiteBackupManager = class {
     }
     let db;
     try {
-      db = new Database3(sourceDbPath, { readonly: true, timeout: 5e3 });
+      db = new Database2(sourceDbPath, { readonly: true, timeout: 5e3 });
     } catch (err) {
       return {
         healthy: false,
@@ -952,7 +840,7 @@ function validateEnvironmentAndSafeguards() {
   }
   const bypassMaintenance = process.env.BYPASS_MAINTENANCE_CHECK === "true";
   if (!bypassMaintenance && !isDryRun) {
-    if (!isMaintenanceFullyActive(resolvedPath)) {
+    if (!isCrossProcessFullyActive(resolvedPath)) {
       throw new Error(
         'FATAL SAFEGUARD: Database is not in verified ACTIVE maintenance mode. Execute "node scripts/maintenance_control.mjs --enable" to drain writes before applying migration.'
       );
@@ -973,7 +861,7 @@ function executeMigrationCli(customDbPath) {
   console.log(` - Migration ID:     ${EMAIL_USER_ID_MIGRATION_ID}`);
   console.log(` - Timestamp:        ${(/* @__PURE__ */ new Date()).toISOString()}`);
   console.log(` - Dry Run Mode:     ${isDryRun}`);
-  const db = new Database4(dbPath, { timeout: 15e3 });
+  const db = new Database3(dbPath, { timeout: 15e3 });
   try {
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
@@ -1001,7 +889,7 @@ function executeMigrationCli(customDbPath) {
         }
       };
     }
-    if (!isMaintenanceActive(dbPath)) {
+    if (!isCrossProcessMaintenanceActive(dbPath)) {
       requestMaintenanceDrainSync({ customDbPath: dbPath, reason: "migration_preflight" });
     }
     const dataVersionBefore = db.pragma("data_version", { simple: true });

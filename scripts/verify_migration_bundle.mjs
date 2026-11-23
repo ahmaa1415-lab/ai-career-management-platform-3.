@@ -16,7 +16,7 @@ const rootDir = process.cwd();
 const bundlePath = path.join(rootDir, 'scripts', 'run_email_migration.mjs');
 const sourceCliPath = path.join(rootDir, 'scripts', 'run_email_migration.ts');
 const sourceMigrationPath = path.join(rootDir, 'lib', 'migrations.ts');
-const sourceMaintenancePath = path.join(rootDir, 'lib', 'maintenance.ts');
+const sourceCoordinationPath = path.join(rootDir, 'lib', 'coordination.ts');
 
 console.log('[VERIFY BUNDLE] Checking migration bundle integrity...');
 
@@ -49,8 +49,21 @@ for (const token of requiredTokens) {
   }
 }
 
+// Ensure the bundle is completely decoupled from Next.js server runtime (fixes ERR_MODULE_NOT_FOUND on node_modules/next/server)
+const forbiddenTokens = [
+  'next/server',
+  'NextResponse'
+];
+
+for (const token of forbiddenTokens) {
+  if (bundleContent.includes(token)) {
+    console.error(`[ERROR] Bundle contains forbidden token (violates standalone Node ESM decoupling): "${token}"`);
+    process.exit(1);
+  }
+}
+
 // Check mtime against source files
-const sourceFiles = [sourceCliPath, sourceMigrationPath, sourceMaintenancePath];
+const sourceFiles = [sourceCliPath, sourceMigrationPath, sourceCoordinationPath];
 let isStale = false;
 
 for (const src of sourceFiles) {
