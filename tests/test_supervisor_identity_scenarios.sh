@@ -173,19 +173,74 @@ OUT6=$(
 assert_test "Scenario 6: Unsupported script paths rejected" 0 "PASS: Unsupported script paths rejected" "$?" "${OUT6}"
 
 # ------------------------------------------------------------------------------
-# Test 7: Empty or Unreadable cmdline
+# Test 7: Empty, Unreadable, or Zero-Reported-Size cmdline
 # ------------------------------------------------------------------------------
-echo "--- Scenario 7: Empty or Unreadable cmdline ---"
-MOCK_PROC="${TEST_DIR}/proc7"
-mkdir -p "${MOCK_PROC}"
-create_proc_entry "${MOCK_PROC}" 21 1 1001 "node" ""
+echo "--- Scenario 7: Empty, Unreadable, or Zero-Reported-Size cmdline ---"
+# 7A: Empty cmdline (0 bytes, e.g. kernel thread or defunct process)
+MOCK_PROC7A="${TEST_DIR}/proc7a"
+mkdir -p "${MOCK_PROC7A}"
+create_proc_entry "${MOCK_PROC7A}" 21 1 1001 "node" ""
 
-OUT7=$(
-  cands=$(discover_supervisor_candidates "${MOCK_PROC}")
+OUT7A=$(
+  cands=$(discover_supervisor_candidates "${MOCK_PROC7A}")
   [ -z "$cands" ] || { echo "FAIL: Empty cmdline accepted: $cands"; exit 1; }
   echo "PASS: Empty cmdline ignored"
 )
-assert_test "Scenario 7: Empty cmdline ignored" 0 "PASS: Empty cmdline ignored" "$?" "${OUT7}"
+assert_test "Scenario 7A: Empty cmdline ignored" 0 "PASS: Empty cmdline ignored" "$?" "${OUT7A}"
+
+# 7B: Unreadable cmdline (e.g. permission denied / chmod 000)
+MOCK_PROC7B="${TEST_DIR}/proc7b"
+mkdir -p "${MOCK_PROC7B}"
+create_proc_entry "${MOCK_PROC7B}" 22 1 1001 "node" "node\0scripts/start_all.mjs\0"
+chmod 000 "${MOCK_PROC7B}/22/cmdline" 2>/dev/null || true
+if [ ! -r "${MOCK_PROC7B}/22/cmdline" ]; then
+  OUT7B=$(
+    cands=$(discover_supervisor_candidates "${MOCK_PROC7B}")
+    [ -z "$cands" ] || { echo "FAIL: Unreadable cmdline accepted: $cands"; exit 1; }
+    echo "PASS: Unreadable cmdline ignored"
+  )
+  assert_test "Scenario 7B: Unreadable cmdline (chmod 000) ignored" 0 "PASS: Unreadable cmdline ignored" "$?" "${OUT7B}"
+else
+  # On platforms where chmod 000 is not honored by the filesystem (e.g. non-POSIX Windows mounts),
+  # verify that an unreadable/missing file is safely ignored via [ -r ].
+  rm -f "${MOCK_PROC7B}/22/cmdline"
+  OUT7B=$(
+    cands=$(discover_supervisor_candidates "${MOCK_PROC7B}")
+    [ -z "$cands" ] || { echo "FAIL: Missing cmdline accepted: $cands"; exit 1; }
+    echo "PASS: Missing/unreadable cmdline ignored"
+  )
+  assert_test "Scenario 7B: Missing/unreadable cmdline ignored" 0 "PASS: Missing/unreadable cmdline ignored" "$?" "${OUT7B}"
+fi
+
+# 7C: Readable cmdline with zero reported size (Linux procfs virtual file behavior)
+# In Linux procfs, virtual files report st_size = 0 to stat(2), so [ -s ] fails while [ -r ] succeeds.
+MOCK_PROC7C="${TEST_DIR}/proc7c"
+mkdir -p "${MOCK_PROC7C}"
+create_proc_entry "${MOCK_PROC7C}" 23 1 1001 "node" "node\0scripts/start_all.mjs\0"
+OUT7C=$(
+  # Verify that if a system has a virtual procfs cmdline (like /proc/$$/cmdline),
+  # [ -s ] fails (size 0) but [ -r ] passes (readable)
+  if [ -r "/proc/$$/cmdline" ]; then
+    if [ -s "/proc/$$/cmdline" ]; then
+      echo "NOTE: Virtual /proc/$$/cmdline reported non-zero size on this platform"
+    else
+      # Confirmed: Linux procfs reports size 0 but is readable
+      test ! -s "/proc/$$/cmdline" && test -r "/proc/$$/cmdline" || {
+        echo "FAIL: Contract violated: virtual /proc/$$/cmdline was not readable with size 0"
+        exit 1
+      }
+    fi
+  fi
+  # Now verify discover_supervisor_candidates discovers PID 23 when cmdline is readable
+  cands=$(discover_supervisor_candidates "${MOCK_PROC7C}")
+  if [ "$cands" = "23" ]; then
+    echo "PASS: Readable cmdline candidate discovered successfully"
+  else
+    echo "FAIL: Expected candidate 23, found: $cands"
+    exit 1
+  fi
+)
+assert_test "Scenario 7C: Readable cmdline candidate discovered and procfs size-0 contract verified" 0 "PASS: Readable cmdline candidate discovered" "$?" "${OUT7C}"
 
 # ------------------------------------------------------------------------------
 # Test 8: Zero Candidates

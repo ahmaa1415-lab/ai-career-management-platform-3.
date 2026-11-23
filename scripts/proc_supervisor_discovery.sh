@@ -30,8 +30,8 @@ discover_supervisor_candidates() {
     comm=$(cat "$p/comm" 2>/dev/null || echo "")
     [ "$comm" = "node" ] || continue
 
-    # 2. Verify cmdline is readable and non-empty
-    [ -s "$p/cmdline" ] || continue
+    # 2. Verify cmdline is readable (do not use -s as Linux procfs virtual files report st_size=0)
+    [ -r "$p/cmdline" ] || continue
 
     # 3. Argument-boundary-aware check: split cmdline on NUL byte (\000) into tokens
     first_arg=""
