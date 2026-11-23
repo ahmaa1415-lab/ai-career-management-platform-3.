@@ -4,7 +4,7 @@ console.log('================================================================');
 console.log('--- RUNNING UI-01: ALL 21 WEB PAGES & BROWSER RENDERING TEST ---');
 console.log('================================================================');
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 
 // Generate verified authenticated session for candidate browsing
 const testSession = createSession('user_default_01', { rememberMe: true, userAgent: 'HeadlessBrowserTest' });

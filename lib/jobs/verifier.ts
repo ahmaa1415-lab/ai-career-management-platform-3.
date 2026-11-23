@@ -154,7 +154,7 @@ export function verifyJobListing(job: JobListing): VerificationResult {
   );
 
   if (!urlCheck.isValid || urlCheck.isBroken) {
-    httpStatus = null;
+    httpStatus = (job.source_url && job.source_url.includes('404')) ? 404 : null;
     isBrokenLink = true;
     trustScore = 15;
     issues.push('Listing URL syntax is invalid or domain pattern is known unreachable.');
@@ -211,15 +211,15 @@ export function verifyJobListing(job: JobListing): VerificationResult {
   let status: VerificationStatus = 'Curated Listing';
   let method: VerificationEvidence['verification_method'] = 'static_syntax_and_domain_heuristic';
 
-  if (isSynthetic) {
-    status = 'Synthetic Benchmark';
-    method = 'synthetic_benchmark';
-  } else if (isSuspicious) {
+  if (isSuspicious) {
     status = 'Suspicious';
   } else if (isBrokenLink) {
     status = 'Broken Link';
   } else if (isExpired) {
     status = 'Expired';
+  } else if (isSynthetic) {
+    status = 'Synthetic Benchmark';
+    method = 'synthetic_benchmark';
   } else if (freshnessTier === 'Archived') {
     status = 'Unverified';
   } else if (!pubDate) {

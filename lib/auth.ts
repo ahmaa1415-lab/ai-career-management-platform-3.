@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import db, { logAudit } from './db';
+import { isCrossProcessMaintenanceActive } from './coordination';
 
 // Default salt & iterations for PBKDF2 / scrypt
 const SCRYPT_KEYLEN = 64;
@@ -371,15 +372,34 @@ export function updateUserSettings(userId = 'user_default_01', updates: Record<s
  * Helper to ensure default candidate has a known password hash
  */
 export function ensureDefaultUserCredentials(): void {
-  const user = db.prepare("SELECT * FROM users WHERE id = 'user_default_01'").get() as any;
-  if (user && !user.password_hash) {
-    const defaultHash = hashPassword('Password123!');
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = 'user_default_01'").run(defaultHash);
+  if (isCrossProcessMaintenanceActive()) {
+    return;
+  }
+  try {
+    const user = db.prepare("SELECT * FROM users WHERE id = 'user_default_01'").get() as any;
+    if (user && !user.password_hash) {
+      const defaultHash = hashPassword('Password123!');
+      db.prepare("UPDATE users SET password_hash = ? WHERE id = 'user_default_01'").run(defaultHash);
+    }
+  } catch (err: any) {
+    if (err?.code === 'MAINTENANCE_MODE_ACTIVE') {
+      return;
+    }
+    if (err?.message?.includes('no such table')) {
+      return;
+    }
+    throw err;
   }
 }
 
 // Automatically ensure credentials on load
-ensureDefaultUserCredentials();
+try {
+  ensureDefaultUserCredentials();
+} catch (err: any) {
+  if (err?.code !== 'MAINTENANCE_MODE_ACTIVE') {
+    throw err;
+  }
+}
 
 /**
  * Extracts and validates the authenticated user from the request.

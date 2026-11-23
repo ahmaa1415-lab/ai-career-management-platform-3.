@@ -1,0 +1,485 @@
+#!/usr/bin/env bash
+
+# ------------------------------------------------------------------------------
+# validate_shutdown_logs: Validates container graceful shutdown sequence & code
+# ------------------------------------------------------------------------------
+validate_shutdown_logs() {
+  local logs="$1"
+  local exit_code="${2:-}"
+
+  # 1. Verify container exit code is provided and non-empty
+  if [ -z "${exit_code}" ]; then
+    echo "FAIL: Container exit code is missing or empty (failed docker wait execution)!"
+    return 1
+  fi
+
+  # 2. Verify container exit code (0 or 143 for orderly SIGTERM)
+  if [[ "${exit_code}" != "0" && "${exit_code}" != "143" ]]; then
+    echo "FAIL: Expected container exit code 0 or 143 (orderly SIGTERM), got: '${exit_code}'!"
+    return 1
+  fi
+
+  # 2. Verify explicit state transition marker
+  if [[ "${logs}" != *"[SUPERVISOR-STATE] Transitioned to SHUTDOWN_COMPLETE"* ]]; then
+    echo "FAIL: Container logs missing explicit shutdown completion marker '[SUPERVISOR-STATE] Transitioned to SHUTDOWN_COMPLETE'!"
+    return 1
+  fi
+
+  # 3. Verify successful shutdown completion message
+  if [[ "${logs}" != *"[SUPERVISOR] Shutdown completed successfully"* ]]; then
+    echo "FAIL: Container logs missing successful shutdown message '[SUPERVISOR] Shutdown completed successfully'!"
+    return 1
+  fi
+
+  # 4. Verify WAL checkpoint execution confirmation
+  if [[ "${logs}" != *"[SUPERVISOR-WAL] Checkpoint successfully transferred frames"* ]]; then
+    echo "FAIL: Container logs missing WAL checkpoint success confirmation!"
+    return 1
+  fi
+
+  echo "PASS: Signal forwarding and graceful shutdown confirmed in container logs."
+  return 0
+}
+
+# Sourcing guard: allow testing validate_shutdown_logs without executing the container lifecycle
+if [ "${CI_LIFECYCLE_LIB_ONLY:-0}" = "1" ] || { [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; }; then
+  return 0 2>/dev/null || exit 0
+fi
+
+set -euo pipefail
+
+echo "================================================================================"
+echo "Phase 5.9.9 — Real Linux Container Process Lifecycle & Tini Verification"
+echo "================================================================================"
+
+IMAGE_NAME="career-app:linux-test"
+CONTAINER_NAME="career-test-container"
+DATA_VOLUME_DIR="$(mktemp -d)"
+
+cleanup() {
+  echo "[CLEANUP] Stopping and removing test container..."
+  docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+  rm -rf "${DATA_VOLUME_DIR}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# Helper: Dump container process table via /proc (zero external binary dependencies in slim container)
+dump_proc_tree() {
+  docker exec "${CONTAINER_NAME}" sh -c '
+    printf "%-7s %-7s %-7s %s\n" "PID" "PPID" "USER" "COMMAND"
+    for p in /proc/[0-9]*; do
+      [ -d "$p" ] || continue
+      pid=$(basename "$p")
+      ppid=$(awk '\''/^PPid:/ {print $2}'\'' "$p/status" 2>/dev/null || echo "?")
+      uid=$(awk '\''/^Uid:/ {print $2}'\'' "$p/status" 2>/dev/null || echo "?")
+      cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true)
+      [ -z "$cmd" ] && cmd=$(cat "$p/comm" 2>/dev/null || echo "")
+      printf "%-7s %-7s %-7s %s\n" "$pid" "$ppid" "$uid" "$cmd"
+    done
+  '
+}
+
+echo ">>> [1/12] Building Docker image with tini..."
+docker build -t "${IMAGE_NAME}" -f Dockerfile .
+
+echo ">>> [2/12] Starting container in background with persistent volume..."
+mkdir -p "${DATA_VOLUME_DIR}/uploads"
+docker run -d \
+  --name "${CONTAINER_NAME}" \
+  -e NODE_ENV=production \
+  -e PORT=3000 \
+  -e DATABASE_PATH="/app/data/career_app.db" \
+  -p 3000:3000 \
+  -v "${DATA_VOLUME_DIR}:/app/data" \
+  "${IMAGE_NAME}"
+
+echo ">>> Waiting for container to initialize..."
+sleep 5
+
+echo ">>> [3/12] Inspecting Container Process Tree..."
+PROC_TREE=$(dump_proc_tree)
+echo "${PROC_TREE}"
+
+echo ">>> [4/12] Verifying PID 1 is tini..."
+PID1_CMD=$(docker exec "${CONTAINER_NAME}" sh -c 'tr "\0" " " < /proc/1/cmdline 2>/dev/null || readlink -f /proc/1/exe 2>/dev/null' | tr -d '\r')
+echo "PID 1 command: ${PID1_CMD}"
+if [[ "${PID1_CMD}" != *"/usr/bin/tini"* && "${PID1_CMD}" != *"tini"* ]]; then
+  echo "FAIL: PID 1 is not tini! Received: ${PID1_CMD}"
+  exit 1
+fi
+echo "PASS: PID 1 is /usr/bin/tini."
+
+echo ">>> [5/12] Verifying Node supervisor runs as non-root user (nextjs / uid 1001)..."
+
+# Helper: Run shared supervisor process discovery library inside container
+run_proc_discovery() {
+  local cmd="$1"
+  shift
+  if docker exec "${CONTAINER_NAME}" test -f /app/scripts/proc_supervisor_discovery.sh 2>/dev/null; then
+    docker exec "${CONTAINER_NAME}" sh /app/scripts/proc_supervisor_discovery.sh "$cmd" "$@"
+  else
+    docker exec -i "${CONTAINER_NAME}" sh -s -- "$cmd" "$@" < scripts/proc_supervisor_discovery.sh
+  fi
+}
+
+# Discover Supervisor candidates excluding PID 1 (which is tini)
+# Candidate must be a node process running scripts/start_all.mjs as an exact argument token
+SUPERVISOR_CANDIDATES=$(run_proc_discovery discover /proc | tr -d '\r')
+echo "Supervisor candidate PIDs: ${SUPERVISOR_CANDIDATES}"
+
+CANDIDATE_COUNT=$(echo ${SUPERVISOR_CANDIDATES} | awk '{print NF}')
+if [[ "${CANDIDATE_COUNT}" -eq 0 ]]; then
+  echo "FAIL: Expected exactly 1 Supervisor candidate running node scripts/start_all.mjs (excluding PID 1), found 0!"
+  dump_proc_tree
+  exit 1
+elif [[ "${CANDIDATE_COUNT}" -gt 1 ]]; then
+  echo "FAIL: Ambiguous Supervisor identity: expected 1 candidate, found ${CANDIDATE_COUNT} (${SUPERVISOR_CANDIDATES})!"
+  dump_proc_tree
+  exit 1
+fi
+
+SUPERVISOR_PID=$(echo "${SUPERVISOR_CANDIDATES}" | awk '{print $1}')
+echo "Discovered Supervisor PID: ${SUPERVISOR_PID}"
+
+# Verify process command line
+SUPERVISOR_CMD=$(docker exec "${CONTAINER_NAME}" sh -c "tr '\000' ' ' < /proc/${SUPERVISOR_PID}/cmdline 2>/dev/null" | tr -d '\r')
+echo "Supervisor command line: ${SUPERVISOR_CMD}"
+if [[ -z "${SUPERVISOR_CMD}" ]]; then
+  echo "FAIL: Supervisor process PID ${SUPERVISOR_PID} command line is empty or process disappeared!"
+  dump_proc_tree
+  exit 1
+fi
+if [[ "${SUPERVISOR_CMD}" != *"scripts/start_all.mjs"* ]]; then
+  echo "FAIL: Candidate PID ${SUPERVISOR_PID} command line does not contain scripts/start_all.mjs! Received: '${SUPERVISOR_CMD}'"
+  exit 1
+fi
+
+# Verify process user is unprivileged (nextjs / UID 1001)
+SUPERVISOR_UID_OUT=$(run_proc_discovery verify-uid "${SUPERVISOR_PID}" /proc | tr -d '\r')
+echo "${SUPERVISOR_UID_OUT}"
+if [[ "${SUPERVISOR_UID_OUT}" != PASS* ]]; then
+  echo "FAIL: Supervisor UID verification failed: ${SUPERVISOR_UID_OUT}"
+  dump_proc_tree
+  exit 1
+fi
+echo "PASS: Supervisor runs as unprivileged user nextjs (UID 1001)."
+
+# Recheck that process still exists and remains identifiable after UID extraction (handle process churn)
+CHURN_CHECK=$(run_proc_discovery churn-check "${SUPERVISOR_PID}" /proc | tr -d '\r')
+if [[ "${CHURN_CHECK}" != "VALID" ]]; then
+  echo "FAIL: Supervisor PID ${SUPERVISOR_PID} failed post-UID churn verification: ${CHURN_CHECK}!"
+  dump_proc_tree
+  exit 1
+fi
+echo "PASS: Supervisor PID ${SUPERVISOR_PID} confirmed stable post-UID extraction."
+
+echo ">>> [6/12] Verifying Next.js server and Background Worker are children of Supervisor..."
+echo "Using Supervisor PID: ${SUPERVISOR_PID}"
+
+# Bounded polling for child server process spawned by Supervisor
+CHILD_SERVER_PID=""
+CHILD_SERVER_PPID=""
+for i in {1..20}; do
+  CHILD_INFO=$(run_proc_discovery find-child "${SUPERVISOR_PID}" /proc | tr -d '\r')
+  if [[ -n "${CHILD_INFO}" ]]; then
+    CHILD_SERVER_PID=$(echo "${CHILD_INFO}" | awk '{print $1}')
+    CHILD_SERVER_PPID=$(echo "${CHILD_INFO}" | awk '{print $2}')
+    break
+  fi
+  sleep 0.5
+done
+
+echo "Child server PID: ${CHILD_SERVER_PID}"
+echo "Child server PPID: ${CHILD_SERVER_PPID}"
+
+CHILD_VAL_OUT=$(run_proc_discovery validate-child-ppid "${CHILD_SERVER_PID}" "${CHILD_SERVER_PPID}" "${SUPERVISOR_PID}" | tr -d '\r')
+echo "${CHILD_VAL_OUT}"
+if [[ "${CHILD_VAL_OUT}" != PASS* ]]; then
+  echo "FAIL: Supervisor child PPID validation failed: ${CHILD_VAL_OUT}"
+  dump_proc_tree
+  exit 1
+fi
+
+# If a standalone background worker process is also present, verify its PPID strictly matches SUPERVISOR_PID
+WORKER_RAW=""
+WORKER_EC=0
+WORKER_RAW=$(run_proc_discovery find-worker /proc) || WORKER_EC=$?
+WORKER_INFO=$(echo "${WORKER_RAW}" | tr -d '\r')
+
+if [ "${WORKER_EC}" -eq 0 ]; then
+  # Option A: Standalone background worker process discovered
+  if [[ -z "${WORKER_INFO}" ]]; then
+    echo "FAIL: Background worker discovery returned exit code 0 but produced empty output!"
+    dump_proc_tree
+    exit 1
+  fi
+  WORKER_PID=$(echo "${WORKER_INFO}" | awk '{print $1}')
+  WORKER_PPID=$(echo "${WORKER_INFO}" | awk '{print $2}')
+  if [[ -z "${WORKER_PID}" || -z "${WORKER_PPID}" || "${WORKER_PID}" =~ [^0-9] || "${WORKER_PPID}" =~ [^0-9] ]]; then
+    echo "FAIL: Malformed background worker output: '${WORKER_INFO}'"
+    dump_proc_tree
+    exit 1
+  fi
+  WORKER_VAL_OUT=$(run_proc_discovery validate-child-ppid "${WORKER_PID}" "${WORKER_PPID}" "${SUPERVISOR_PID}" | tr -d '\r')
+  if [[ "${WORKER_VAL_OUT}" != PASS* ]]; then
+    echo "FAIL: Standalone Worker PPID (${WORKER_PPID}) validation failed: ${WORKER_VAL_OUT}!"
+    dump_proc_tree
+    exit 1
+  fi
+  echo "PASS: Standalone Background Worker (PID ${WORKER_PID}) is a verified child of Supervisor (PPID ${WORKER_PPID})."
+elif [ "${WORKER_EC}" -eq 1 ]; then
+  # Option B: Documented exit code 1 indicates no matching standalone worker process in /proc
+  if [[ -n "${WORKER_INFO}" ]]; then
+    echo "FAIL: Background worker discovery returned exit code 1 but produced unexpected output: '${WORKER_INFO}'"
+    dump_proc_tree
+    exit 1
+  fi
+  echo "INFO: Background worker is operating in integrated in-process mode within Supervisor PID ${SUPERVISOR_PID} (Option B)."
+else
+  # Unexpected failure (e.g., container error, script missing, unknown subcommand, syntax error)
+  echo "FAIL: Background worker discovery failed with unexpected exit code ${WORKER_EC}: '${WORKER_INFO}'"
+  dump_proc_tree
+  exit 1
+fi
+
+echo ">>> [7/12] Verifying Healthcheck Endpoint..."
+for i in {1..10}; do
+  if docker exec "${CONTAINER_NAME}" curl -sf http://localhost:3000/api/health >/dev/null; then
+    echo "PASS: Healthcheck responded with 200 OK."
+    break
+  fi
+  echo "Waiting for healthcheck (attempt $i)..."
+  sleep 2
+done
+
+echo ">>> [8/12] Testing Deterministic Zombie / Orphan Reaping via Tini..."
+
+# 1. Re-verify PID 1 is /usr/bin/tini before starting orphan test
+PID1_EXE=$(docker exec "${CONTAINER_NAME}" sh -c 'readlink -f /proc/1/exe 2>/dev/null || tr "\0" " " < /proc/1/cmdline 2>/dev/null' | tr -d '\r')
+echo "Container PID 1 target: ${PID1_EXE}"
+if [[ "${PID1_EXE}" != *"/usr/bin/tini"* && "${PID1_EXE}" != *"tini"* ]]; then
+  echo "FAIL: PID 1 is not /usr/bin/tini! Target: ${PID1_EXE}"
+  exit 1
+fi
+
+# 2. Spawn uniquely identifiable descendant with redirected stdio, capturing exact PID
+# Using 'exec sleep 3' replaces the inner subshell image, avoiding intermediate wrapper PIDs.
+ORPHAN_PID=$(docker exec "${CONTAINER_NAME}" sh -c '
+  (
+    ( exec sleep 3 ) >/dev/null 2>&1 < /dev/null &
+    echo $!
+  )
+' | tr -d '\r' | awk '{print $1}')
+
+echo "Spawned target descendant PID: ${ORPHAN_PID}"
+if [[ -z "${ORPHAN_PID}" || ! "${ORPHAN_PID}" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: Failed to spawn descendant or capture valid numeric PID (received: '${ORPHAN_PID}')."
+  exit 1
+fi
+
+# 3. Verify process exists and belongs to the sleep command
+CMD_LINE=$(docker exec "${CONTAINER_NAME}" sh -c "tr '\0' ' ' < /proc/${ORPHAN_PID}/cmdline 2>/dev/null || cat /proc/${ORPHAN_PID}/comm 2>/dev/null" | tr -d '\r' || true)
+echo "Target process commandline: ${CMD_LINE}"
+if [[ "${CMD_LINE}" != *"sleep"* ]]; then
+  echo "FAIL: PID ${ORPHAN_PID} does not correspond to the spawned sleep process! args: '${CMD_LINE}'"
+  exit 1
+fi
+
+# Helper: Extract field 22 (starttime) from /proc/<pid>/stat with strict validation.
+# Validates target_pid format, stat record PID matching, comm opening/terminating parentheses,
+# valid Linux process state, minimum field count (>= 22), and strictly positive numeric starttime.
+# Emits error diagnostic to stderr and returns non-zero status on any mismatch, malformed, or missing record.
+get_proc_starttime() {
+  local target_pid="$1"
+  if [[ ! "${target_pid}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: target_pid must be a positive decimal integer, got: '${target_pid}'" >&2
+    return 1
+  fi
+  docker exec "${CONTAINER_NAME}" sh -c "awk -v expected_pid=\"${target_pid}\" '
+    BEGIN { found = 0; err = 0; }
+    {
+      line = \$0;
+      if (line !~ /^[1-9][0-9]* \\(/) {
+        print \"Error: invalid PID or missing opening parenthesis in stat record\" > \"/dev/stderr\";
+        err = 1;
+        exit 1;
+      }
+      rec_pid = line;
+      sub(/ \\(.*/, \"\", rec_pid);
+      if (rec_pid != expected_pid) {
+        print \"Error: PID mismatch: expected \" expected_pid \" but record has \" rec_pid > \"/dev/stderr\";
+        err = 1;
+        exit 1;
+      }
+      if (line !~ /\\) /) {
+        print \"Error: missing terminating parenthesis in stat record\" > \"/dev/stderr\";
+        err = 1;
+        exit 1;
+      }
+      s = line;
+      sub(/.*\\) /, \"\", s);
+      n = split(s, a, \" \");
+      if (n < 20) {
+        print \"Error: truncated stat record (less than 22 fields)\" > \"/dev/stderr\";
+        err = 1;
+        exit 1;
+      }
+      state = a[1];
+      if (state !~ /^[RSDZTWXtKxPI]$/) {
+        print \"Error: invalid process state: \" state > \"/dev/stderr\";
+        err = 1;
+        exit 1;
+      }
+      starttime = a[20];
+      if (starttime !~ /^[1-9][0-9]*\$/) {
+        print \"Error: invalid or non-positive starttime: \" starttime > \"/dev/stderr\";
+        err = 1;
+        exit 1;
+      }
+      print starttime;
+      found = 1;
+    }
+    END {
+      if (err) { exit 1; }
+      if (!found) {
+        print \"Error: empty stat file or unparsed record\" > \"/dev/stderr\";
+        exit 1;
+      }
+    }
+  ' /proc/${target_pid}/stat"
+}
+
+# 4. Capture process starttime from /proc/${ORPHAN_PID}/stat (field 22) to eliminate PID-reuse ambiguity.
+# Strictly validates PID, comm delimiters, state code, field count, and positive numeric starttime.
+ORPHAN_STARTTIME=$(get_proc_starttime "${ORPHAN_PID}" | tr -d ' \r' || true)
+echo "Target process starttime: ${ORPHAN_STARTTIME} ticks"
+if [[ -z "${ORPHAN_STARTTIME}" ]]; then
+  echo "FAIL: Failed to extract valid starttime for target PID ${ORPHAN_PID}!"
+  exit 1
+fi
+
+# 5. Bounded polling to observe adoption by PID 1 (tini) while process is alive
+ADOPTED=false
+for i in {1..20}; do
+  # Verify PID identity has not changed via starttime check
+  if [[ -n "${ORPHAN_STARTTIME}" ]]; then
+    CUR_STARTTIME=$(get_proc_starttime "${ORPHAN_PID}" 2>/dev/null | tr -d ' \r' || true)
+    if [[ -n "${CUR_STARTTIME}" && "${CUR_STARTTIME}" != "${ORPHAN_STARTTIME}" ]]; then
+      echo "FAIL: PID ${ORPHAN_PID} was reused! (Spawned starttime: ${ORPHAN_STARTTIME}, current: ${CUR_STARTTIME})"
+      exit 1
+    fi
+  fi
+
+  PPID_VAL=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^PPid:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null" | tr -d ' \r' || true)
+  STATE_VAL=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^State:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null" | tr -d ' \r' | cut -c1 || true)
+
+  if [[ "${PPID_VAL}" == "1" ]]; then
+    echo "Observed adoption by PID 1 on attempt $i (State: ${STATE_VAL}, PPID: ${PPID_VAL}, StartTime: ${ORPHAN_STARTTIME})."
+    # Ensure process is actively running (S=Sleeping or R=Running), NOT a zombie (Z)
+    if [[ "${STATE_VAL}" == "Z" ]]; then
+      echo "FAIL: Process PID ${ORPHAN_PID} died before adoption could be verified in active state!"
+      exit 1
+    fi
+    ADOPTED=true
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ "${ADOPTED}" != "true" ]]; then
+  echo "FAIL: Process PID ${ORPHAN_PID} was not adopted by PID 1 within bounded timeout!"
+  exit 1
+fi
+echo "PASS: Process PID ${ORPHAN_PID} confirmed active and adopted by PID 1 (tini)."
+
+# 6. Bounded polling until process terminates naturally and is reaped from /proc
+REAPED=false
+for i in {1..35}; do
+  EXISTS=$(docker exec "${CONTAINER_NAME}" sh -c "[ -d /proc/${ORPHAN_PID} ] && echo yes || echo no" | tr -d '\r')
+  if [[ "${EXISTS}" == "no" ]]; then
+    echo "Process PID ${ORPHAN_PID} terminated and reaped from /proc on attempt $i."
+    REAPED=true
+    break
+  fi
+
+  # If process exists, verify it still belongs to original process instance
+  if [[ -n "${ORPHAN_STARTTIME}" ]]; then
+    CUR_STARTTIME=$(get_proc_starttime "${ORPHAN_PID}" 2>/dev/null | tr -d ' \r' || true)
+    if [[ -n "${CUR_STARTTIME}" && "${CUR_STARTTIME}" != "${ORPHAN_STARTTIME}" ]]; then
+      echo "Process PID ${ORPHAN_PID} was replaced by a new process instance. Original orphan is confirmed terminated and reaped."
+      REAPED=true
+      break
+    fi
+  fi
+
+  # Check if lingering as a zombie beyond reasonable threshold
+  CURRENT_STATE=$(docker exec "${CONTAINER_NAME}" sh -c "awk '/^State:/ {print \$2}' /proc/${ORPHAN_PID}/status 2>/dev/null" | tr -d ' \r' | cut -c1 || true)
+  if [[ "${CURRENT_STATE}" == "Z" ]]; then
+    echo "Note: Process PID ${ORPHAN_PID} currently in zombie state (attempt $i), awaiting tini waitpid reaping..."
+  fi
+  sleep 0.2
+done
+
+if [[ "${REAPED}" != "true" ]]; then
+  echo "FAIL: Process PID ${ORPHAN_PID} still present in /proc or lingering as un-reaped zombie!"
+  dump_proc_tree
+  exit 1
+fi
+echo "PASS: Deterministic orphan adoption and PID 1 reaping verified for PID ${ORPHAN_PID}."
+
+echo ">>> [9/12] Sending SIGTERM to Container (testing signal forwarding & graceful shutdown)..."
+START_SHUTDOWN=$(date +%s)
+docker kill -s SIGTERM "${CONTAINER_NAME}"
+
+echo ">>> Waiting for container to stop..."
+CONTAINER_EXIT_CODE=$(docker wait "${CONTAINER_NAME}" 2>/dev/null | tr -d '\r' || true)
+SHUTDOWN_DURATION=$(( $(date +%s) - START_SHUTDOWN ))
+echo "Container stopped in ${SHUTDOWN_DURATION} seconds with exit code: ${CONTAINER_EXIT_CODE}."
+
+echo ">>> [10/12] Inspecting Container Shutdown Logs..."
+CONTAINER_LOGS=$(docker logs "${CONTAINER_NAME}" 2>&1)
+echo "${CONTAINER_LOGS}"
+
+validate_shutdown_logs "${CONTAINER_LOGS}" "${CONTAINER_EXIT_CODE}"
+
+echo ">>> [11/12] Validating SQLite WAL Checkpoint and Database Integrity..."
+# Inspect database in mounted volume
+if command -v sqlite3 >/dev/null 2>&1; then
+  sqlite3 "${DATA_VOLUME_DIR}/career_app.db" "PRAGMA integrity_check;" | grep -q "ok"
+  echo "PASS: SQLite integrity check OK."
+else
+  echo "Note: Host sqlite3 CLI not found; skipping offline PRAGMA integrity_check (WAL checkpoint validated via supervisor logs & file size)."
+fi
+
+# Verify WAL file status (TRUNCATE checkpoint leaves WAL empty or cleanly checkpointed)
+if [ -f "${DATA_VOLUME_DIR}/career_app.db-wal" ]; then
+  WAL_SIZE=$(wc -c < "${DATA_VOLUME_DIR}/career_app.db-wal" | tr -d '[:space:]')
+  echo "WAL file size after shutdown: ${WAL_SIZE} bytes"
+  if [ "${WAL_SIZE:-0}" -ne 0 ]; then
+    echo "FAIL: Expected WAL file size 0 bytes after TRUNCATE checkpoint, got ${WAL_SIZE} bytes!"
+    exit 1
+  fi
+fi
+echo "PASS: SQLite WAL checkpoint verified."
+
+echo ">>> [12/12] Testing Container Restartability..."
+docker start "${CONTAINER_NAME}"
+RESTART_OK=false
+for i in $(seq 1 10); do
+  if docker exec "${CONTAINER_NAME}" curl -sf http://localhost:3000/api/health >/dev/null 2>&1; then
+    RESTART_OK=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "${RESTART_OK}" != "true" ]; then
+  echo "FAIL: Container restarted but healthcheck failed after 10 attempts!"
+  docker logs "${CONTAINER_NAME}"
+  exit 1
+fi
+echo "PASS: Container restarted cleanly and passed healthcheck."
+
+echo "================================================================================"
+echo "ALL 12 REAL LINUX CONTAINER PROCESS LIFECYCLE CHECKS PASSED!"
+echo "================================================================================"

@@ -1,5 +1,6 @@
 import db, { logAudit } from '../db';
 import { LinkedInRecruiterActivity, LinkedInCompanyUpdate, LinkedInIndustryInsight } from '../types';
+import { isCrossProcessMaintenanceActive } from '../coordination';
 
 /**
  * Verified LinkedIn Recruiter Activities dataset focused on FMCG, Retail,
@@ -176,72 +177,88 @@ export const SEED_INDUSTRY_INSIGHTS: LinkedInIndustryInsight[] = [
  * Seeds intelligence tables if empty.
  */
 export function seedLinkedInIntelligence(): void {
-  // Recruiter Activities
-  const recCount = (db.prepare('SELECT COUNT(*) as count FROM linkedin_recruiter_activity').get() as any).count;
-  if (recCount === 0) {
-    const insertRec = db.prepare(`
-      INSERT INTO linkedin_recruiter_activity (
-        id, author_name, author_title, company, post_text, job_title,
-        location, publication_date, post_url, recruiter_profile_url,
-        contact_instructions, author_avatar, is_verified
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    db.transaction(() => {
-      for (const rec of SEED_RECRUITER_ACTIVITIES) {
-        insertRec.run(
-          rec.id, rec.author_name, rec.author_title, rec.company, rec.post_text,
-          rec.job_title || null, rec.location || null, rec.publication_date,
-          rec.post_url, rec.recruiter_profile_url || null, rec.contact_instructions || null,
-          rec.author_avatar || null, rec.is_verified
-        );
-      }
-    })();
+  if (isCrossProcessMaintenanceActive()) {
+    return;
   }
+  try {
+    // Recruiter Activities
+    const recCount = (db.prepare('SELECT COUNT(*) as count FROM linkedin_recruiter_activity').get() as any).count;
+    if (recCount === 0) {
+      const insertRec = db.prepare(`
+        INSERT INTO linkedin_recruiter_activity (
+          id, author_name, author_title, company, post_text, job_title,
+          location, publication_date, post_url, recruiter_profile_url,
+          contact_instructions, author_avatar, is_verified
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-  // Company Updates
-  const compCount = (db.prepare('SELECT COUNT(*) as count FROM linkedin_company_updates').get() as any).count;
-  if (compCount === 0) {
-    const insertComp = db.prepare(`
-      INSERT INTO linkedin_company_updates (
-        id, company, headline, update_type, summary, career_relevance, publication_date, source_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+      db.transaction(() => {
+        for (const rec of SEED_RECRUITER_ACTIVITIES) {
+          insertRec.run(
+            rec.id, rec.author_name, rec.author_title, rec.company, rec.post_text,
+            rec.job_title || null, rec.location || null, rec.publication_date,
+            rec.post_url, rec.recruiter_profile_url || null, rec.contact_instructions || null,
+            rec.author_avatar || null, rec.is_verified
+          );
+        }
+      })();
+    }
 
-    db.transaction(() => {
-      for (const comp of SEED_COMPANY_UPDATES) {
-        insertComp.run(
-          comp.id, comp.company, comp.headline, comp.update_type,
-          comp.summary, comp.career_relevance, comp.publication_date, comp.source_url
-        );
-      }
-    })();
-  }
+    // Company Updates
+    const compCount = (db.prepare('SELECT COUNT(*) as count FROM linkedin_company_updates').get() as any).count;
+    if (compCount === 0) {
+      const insertComp = db.prepare(`
+        INSERT INTO linkedin_company_updates (
+          id, company, headline, update_type, summary, career_relevance, publication_date, source_url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-  // Industry Insights
-  const insCount = (db.prepare('SELECT COUNT(*) as count FROM linkedin_industry_insights').get() as any).count;
-  if (insCount === 0) {
-    const insertIns = db.prepare(`
-      INSERT INTO linkedin_industry_insights (
-        id, title, topic, author_name, author_title, company, publication_date,
-        insights_summary, career_relevance, post_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+      db.transaction(() => {
+        for (const comp of SEED_COMPANY_UPDATES) {
+          insertComp.run(
+            comp.id, comp.company, comp.headline, comp.update_type,
+            comp.summary, comp.career_relevance, comp.publication_date, comp.source_url
+          );
+        }
+      })();
+    }
 
-    db.transaction(() => {
-      for (const ins of SEED_INDUSTRY_INSIGHTS) {
-        insertIns.run(
-          ins.id, ins.title, ins.topic, ins.author_name, ins.author_title,
-          ins.company || null, ins.publication_date, ins.insights_summary,
-          ins.career_relevance, ins.post_url
-        );
-      }
-    })();
+    // Industry Insights
+    const insCount = (db.prepare('SELECT COUNT(*) as count FROM linkedin_industry_insights').get() as any).count;
+    if (insCount === 0) {
+      const insertIns = db.prepare(`
+        INSERT INTO linkedin_industry_insights (
+          id, title, topic, author_name, author_title, company, publication_date,
+          insights_summary, career_relevance, post_url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      db.transaction(() => {
+        for (const ins of SEED_INDUSTRY_INSIGHTS) {
+          insertIns.run(
+            ins.id, ins.title, ins.topic, ins.author_name, ins.author_title,
+            ins.company || null, ins.publication_date, ins.insights_summary,
+            ins.career_relevance, ins.post_url
+          );
+        }
+      })();
+    }
+  } catch (err: any) {
+    if (err?.code === 'MAINTENANCE_MODE_ACTIVE') {
+      return;
+    }
+    throw err;
   }
 }
 
 // Ensure seeded on first load
-seedLinkedInIntelligence();
+try {
+  seedLinkedInIntelligence();
+} catch (err: any) {
+  if (err?.code !== 'MAINTENANCE_MODE_ACTIVE') {
+    throw err;
+  }
+}
 
 export function getLinkedInRecruiterActivity(filter?: { company?: string; location?: string }): LinkedInRecruiterActivity[] {
   let query = 'SELECT * FROM linkedin_recruiter_activity WHERE 1=1';

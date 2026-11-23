@@ -1,6 +1,8 @@
 import db, { getOrCreateDefaultUser } from '../lib/db';
 import { POST as uploadPOST } from '../app/api/cv/upload/route';
 import { GET as resumesGET } from '../app/api/resumes/route';
+import { getTestAuthContext, createExpiredTestSession } from './helpers/testAuth';
+import assert from 'assert';
 import crypto from 'crypto';
 
 console.log('========================================================================');
@@ -102,7 +104,31 @@ Association of Chartered Certified Accountants (ACCA) | Certified Internal Audit
 
 async function runRegressionTestSuite() {
   const user = getOrCreateDefaultUser();
+  const authContext = getTestAuthContext(user.id);
   console.log(`[Suite Setup] Active User ID: ${user.id}`);
+
+  // =========================================================================
+  // SCENARIO 0: Authentication Enforcement & Security Invariants
+  // =========================================================================
+  console.log('\n>>> [SCENARIO 0] Testing Authentication Gate (Negative Tests)...');
+  const unauthUpload = await uploadPOST(new Request('http://localhost:3000/api/cv/upload', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'sample', filename: 'sample.txt' })
+  }));
+  assert.strictEqual(unauthUpload.status, 401, 'Unauthenticated upload must return 401');
+
+  const unauthGet = await resumesGET(new Request('http://localhost:3000/api/resumes'));
+  assert.strictEqual(unauthGet.status, 401, 'Unauthenticated resumes GET must return 401');
+
+  const expToken = createExpiredTestSession(user.id);
+  const expUpload = await uploadPOST(new Request('http://localhost:3000/api/cv/upload', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'Cookie': `career_session=${expToken}` },
+    body: JSON.stringify({ text: 'sample', filename: 'sample.txt' })
+  }));
+  assert.strictEqual(expUpload.status, 401, 'Expired session upload must return 401');
+  console.log('  ✓ 401 Unauthorized strictly enforced for missing or expired credentials.');
 
   let resumeAId = '';
   let resumeBId = '';
@@ -122,7 +148,7 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 1] Uploading Resume A (FMCG Category Manager - Sarah Al-Mansoor)...');
   const reqA = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_A_FMCG,
       filename: 'sarah_almansoor_cv.txt'
@@ -167,7 +193,7 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 2] Uploading Resume B (Tech / Cloud Architect - Marcus Vance)...');
   const reqB = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_B_TECH,
       filename: 'marcus_vance_cv.txt'
@@ -217,7 +243,7 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 3] Uploading Resume C (Finance & Audit Controller - Elena Rostova)...');
   const reqC = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_C_FINANCE,
       filename: 'elena_rostova_cv.txt'
@@ -264,7 +290,9 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 4] Verifying Version Switching & Isolated Retrieval...');
   
   // Fetch Resume A
-  const reqGetA = new Request(`http://localhost:3000/api/resumes?id=${resumeAId}`);
+  const reqGetA = new Request(`http://localhost:3000/api/resumes?id=${resumeAId}`, {
+    headers: { 'Cookie': authContext.cookieHeader }
+  });
   const resGetA = await resumesGET(reqGetA);
   const dataGetA = await resGetA.json();
   if (dataGetA.extracted_profile?.candidate_name !== 'Sarah Al-Mansoor') {
@@ -272,7 +300,9 @@ async function runRegressionTestSuite() {
   }
 
   // Fetch Resume B
-  const reqGetB = new Request(`http://localhost:3000/api/resumes?id=${resumeBId}`);
+  const reqGetB = new Request(`http://localhost:3000/api/resumes?id=${resumeBId}`, {
+    headers: { 'Cookie': authContext.cookieHeader }
+  });
   const resGetB = await resumesGET(reqGetB);
   const dataGetB = await resGetB.json();
   if (dataGetB.extracted_profile?.candidate_name !== 'Marcus Vance') {
@@ -280,12 +310,26 @@ async function runRegressionTestSuite() {
   }
 
   // Fetch Resume C
-  const reqGetC = new Request(`http://localhost:3000/api/resumes?id=${resumeCId}`);
+  const reqGetC = new Request(`http://localhost:3000/api/resumes?id=${resumeCId}`, {
+    headers: { 'Cookie': authContext.cookieHeader }
+  });
   const resGetC = await resumesGET(reqGetC);
   const dataGetC = await resGetC.json();
   if (dataGetC.extracted_profile?.candidate_name !== 'Elena Rostova') {
     throw new Error(`Scenario 4: Failed to retrieve isolated Candidate C profile! Got ${dataGetC.extracted_profile?.candidate_name}`);
   }
+
+  // Tenant Isolation: User B cannot retrieve User A's resume
+  const userBAuth = getTestAuthContext('user_tenant_b_cv_isolated');
+  const reqLeak = new Request(`http://localhost:3000/api/resumes?id=${resumeAId}`, {
+    headers: { 'Cookie': userBAuth.cookieHeader }
+  });
+  const resLeak = await resumesGET(reqLeak);
+  const dataLeak = await resLeak.json();
+  if (dataLeak.extracted_profile?.candidate_name === 'Sarah Al-Mansoor') {
+    throw new Error('Tenant Leakage: User B accessed User A resume!');
+  }
+  console.log('  ✓ Multi-tenant isolation verified: User B cannot access User A resume.');
 
   console.log('  ✓ Resume A retrieved independently: Sarah Al-Mansoor (Almarai)');
   console.log('  ✓ Resume B retrieved independently: Marcus Vance (CloudScale)');
@@ -298,7 +342,7 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 5] Testing Duplicate Content Detection (Identical Hash)...');
   const reqDup = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_A_FMCG,
       filename: 'sarah_almansoor_copy.txt'
@@ -323,7 +367,7 @@ async function runRegressionTestSuite() {
   const RESUME_A_MODIFIED = RESUME_A_FMCG + '\n- Delivered $1.5M in incremental annual trade margin expansion.';
   const reqMod = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_A_MODIFIED,
       filename: 'sarah_almansoor_cv.txt' // Same filename, different content
@@ -350,7 +394,7 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 7] Testing Concurrent Multi-Resume Uploads...');
   const concurrentReq1 = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_B_TECH + '\n# Concurrent Thread 1',
       filename: 'concurrent_b1.txt'
@@ -358,7 +402,7 @@ async function runRegressionTestSuite() {
   });
   const concurrentReq2 = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: RESUME_C_FINANCE + '\n# Concurrent Thread 2',
       filename: 'concurrent_c2.txt'
@@ -393,7 +437,7 @@ async function runRegressionTestSuite() {
   console.log('\n>>> [SCENARIO 8] Testing Corrupted / Empty File Upload Graceful Handling...');
   const reqEmpty = new Request('http://localhost:3000/api/cv/upload', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'Cookie': authContext.cookieHeader },
     body: JSON.stringify({
       text: 'bad text',
       filename: 'corrupted_file.txt'

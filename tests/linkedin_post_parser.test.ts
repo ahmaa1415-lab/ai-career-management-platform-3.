@@ -2,6 +2,7 @@ import assert from 'assert';
 import db, { getOrCreateDefaultUser } from '../lib/db';
 import { getFullProfile } from '../lib/onboarding';
 import { parseLinkedInHiringPost, applyToLinkedInPostRole } from '../lib/linkedin-post-parser';
+import { approveApplicationPackage, recordCandidateSubmission } from '../lib/applications/workflow';
 
 console.log('Testing LinkedIn Hiring Post Parser & Multi-Role Disaggregation...');
 
@@ -93,26 +94,38 @@ assert.strictEqual(applyResult.success, true);
 assert.strictEqual(applyResult.recruiter_email, 'mansi.deo@ourshopee.com');
 console.log('✓ Successfully dispatched direct email application to mansi.deo@ourshopee.com');
 
-// 3. Verify database records created
+// 3. Verify database records created (Truthful Lifecycle: 'Package Prepared', Draft Email)
 const appRow = db.prepare('SELECT * FROM applications WHERE id = ?').get(applyResult.application_id) as any;
 assert.ok(appRow, 'Application record must exist in database');
-assert.strictEqual(appRow.status, 'Applied');
+assert.strictEqual(appRow.status, 'Package Prepared', 'Application must be staged in Package Prepared state awaiting candidate review');
 assert.strictEqual(appRow.recruiter_email, 'mansi.deo@ourshopee.com');
-assert.strictEqual(appRow.submission_type, 'Automated');
-console.log('✓ Application record confirmed in DB with recruiter contact metadata');
+assert.strictEqual(appRow.submission_type, 'Manual', 'Submission type must be Manual');
+console.log('✓ Application record confirmed in DB with recruiter contact metadata in Package Prepared state');
 
 const emailRow = db.prepare('SELECT * FROM emails WHERE id = ?').get(applyResult.email_id) as any;
 assert.ok(emailRow, 'Email record must exist in database');
 assert.strictEqual(emailRow.recipient, 'mansi.deo@ourshopee.com');
-assert.strictEqual(emailRow.is_sent, 1);
+assert.strictEqual(emailRow.is_draft, 1, 'Email must be prepared as draft');
+assert.strictEqual(emailRow.is_sent, 0, 'Email must not be dispatched without explicit candidate approval');
 assert.ok(emailRow.body.includes('Dear Mansi Deo,'));
 assert.ok(emailRow.body.includes('Procurement Coordinator'));
 assert.ok(emailRow.body.includes('Ourshopee'));
-console.log('✓ Outbound recruiter email verified in CRM with personalized body and attachment');
+console.log('✓ Outbound recruiter draft email verified in CRM with personalized body and attachment');
 
 const resumeRow = db.prepare('SELECT * FROM resumes WHERE id = ?').get(appRow.tailored_cv_id) as any;
 assert.ok(resumeRow, 'Tailored CV must exist in resumes table');
 assert.ok(resumeRow.title.includes('Ourshopee'));
 console.log('✓ Tailored CV verified in DB for Ourshopee application');
+
+// 4. Candidate Approval & Submission Lifecycle
+const approved = approveApplicationPackage(applyResult.application_id, user.id, true);
+assert.strictEqual(approved.status, 'Ready for Candidate Submission');
+assert.strictEqual(approved.human_approved, 1);
+console.log('✓ Candidate approval verified: Package state advanced to Ready for Candidate Submission');
+
+const submitted = recordCandidateSubmission(applyResult.application_id, user.id, true, 'Confirmed post application');
+assert.strictEqual(submitted.status, 'Submitted by Candidate');
+assert.strictEqual(submitted.submission_confirmed, 1);
+console.log('✓ Candidate submission confirmed: Status advanced to Submitted by Candidate');
 
 console.log('\nAll LinkedIn hiring post parsing and multi-role auto-apply tests PASSED successfully!');

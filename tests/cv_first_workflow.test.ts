@@ -234,19 +234,19 @@ TypeScript, JavaScript, Next.js, React, Node.js, Python, FastAPI, PostgreSQL, SQ
     throw new Error('SECURITY VIOLATION: Application submitted without human approval!');
   }
 
-  // Approve in Approval Center
+  // Approve in Approval Center (Truthful Lifecycle: 'Ready for Candidate Submission')
   const approved = approveApplicationPackage(appPackage.id, user.id, true);
-  if (approved.status !== 'Ready to Apply' || approved.human_approved !== 1) {
-    throw new Error('Approval Center failed to transition package to "Ready to Apply"');
+  if (approved.status !== 'Ready for Candidate Submission' || approved.human_approved !== 1) {
+    throw new Error('Approval Center failed to transition package to "Ready for Candidate Submission"');
   }
-  console.log('✓ Package approved by human. Status: "Ready to Apply"');
+  console.log('✓ Package approved by human. Status: "Ready for Candidate Submission"');
 
-  // Submit and confirm in CRM
+  // Submit and confirm in CRM (Truthful Lifecycle: 'Submitted by Candidate')
   const submitted = recordApplicationSubmission(appPackage.id, user.id, 'Applied via company careers portal with tailored package.');
-  if (submitted.status !== 'Applied' || submitted.submission_confirmed !== 1) {
+  if (submitted.status !== 'Submitted by Candidate' || submitted.submission_confirmed !== 1) {
     throw new Error('Failed to record submission confirmation');
   }
-  console.log('✓ Submission confirmed. Application Status in CRM: "Applied"');
+  console.log('✓ Submission confirmed. Application Status in CRM: "Submitted by Candidate"');
 
   // Advance CRM lifecycle: Applied -> Interview
   const interviewStatus = updateApplicationStatus(appPackage.id, 'Interview', 'Technical screening scheduled with hiring manager.', user.id);

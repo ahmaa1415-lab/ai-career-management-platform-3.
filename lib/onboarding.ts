@@ -269,7 +269,10 @@ export function saveOnboarding(
     cvText?: string;
   }
 ): FullCandidateProfile {
-  // Target countries are optional and user-controlled
+  // Target countries are non-negotiable when completing onboarding
+  if (data.location && Array.isArray(data.location.target_countries) && data.location.target_countries.length === 0) {
+    throw new Error('Non-negotiable requirement: Target countries cannot be empty.');
+  }
   const safeTargetCountries = Array.isArray(data.location?.target_countries) ? data.location.target_countries : [];
 
   const uid = userId || (getOrCreateDefaultUser()).id;

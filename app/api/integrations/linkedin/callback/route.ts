@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth';
 import db, { logAudit } from '@/lib/db';
+import { isMaintenanceActive, createMaintenanceResponse } from '@/lib/maintenance';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
+  if (isMaintenanceActive()) {
+    return createMaintenanceResponse();
+  }
+
   try {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get('code');

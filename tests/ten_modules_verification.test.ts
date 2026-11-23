@@ -232,20 +232,20 @@ async function run10ModulesVerification() {
   const app1 = prepareApplicationPackage(topMatch1.job.id, userId, res1Id);
   const mod8Matches = app1.source_resume_id === res1Id &&
                       app1.is_outdated === 0 &&
-                      app1.status === 'Approval Pending';
-  recordResult('Sarah Al-Mansoor', 8, 'Application Packages', res1Id, mod8Matches, `Staged application references source_resume_id=${res1Id}, status='Approval Pending'`);
+                      app1.status === 'Package Prepared';
+  recordResult('Sarah Al-Mansoor', 8, 'Application Packages', res1Id, mod8Matches, `Staged application references source_resume_id=${res1Id}, status='Package Prepared'`);
 
   // Verification 9: Approval Center
   const approved1 = approveApplicationPackage(app1.id, userId, true);
-  const mod9Matches = approved1.human_approved === 1 && approved1.status === 'Ready to Apply';
-  recordResult('Sarah Al-Mansoor', 9, 'Approval Center', res1Id, mod9Matches, `Explicit consent granted, package state advanced to 'Ready to Apply'`);
+  const mod9Matches = approved1.human_approved === 1 && approved1.status === 'Ready for Candidate Submission';
+  recordResult('Sarah Al-Mansoor', 9, 'Approval Center', res1Id, mod9Matches, `Explicit consent granted, package state advanced to 'Ready for Candidate Submission'`);
 
   // Verification 10: Application Tracker
   const submitted1 = recordApplicationSubmission(app1.id, userId, 'Verified test submission for Sarah Al-Mansoor FMCG');
-  const mod10Matches = submitted1.status === 'Applied' &&
+  const mod10Matches = submitted1.status === 'Submitted by Candidate' &&
                        submitted1.submission_confirmed === 1 &&
                        submitted1.source_resume_id === res1Id;
-  recordResult('Sarah Al-Mansoor', 10, 'Application Tracker', res1Id, mod10Matches, `Historical application confirmed: status='Applied', source_resume_id=${res1Id}`);
+  recordResult('Sarah Al-Mansoor', 10, 'Application Tracker', res1Id, mod10Matches, `Historical application confirmed: status='Submitted by Candidate', source_resume_id=${res1Id}`);
 
 
   // --------------------------------------------------------------------------
@@ -346,17 +346,17 @@ async function run10ModulesVerification() {
   const app2 = prepareApplicationPackage(topTechMatch.job.id, userId, res2Id);
   const mod8Matches2 = app2.source_resume_id === res2Id &&
                        app2.is_outdated === 0 &&
-                       app2.status === 'Approval Pending';
+                       app2.status === 'Package Prepared';
   recordResult('Marcus Vance', 8, 'Application Packages', res2Id, mod8Matches2, `Staged application package references source_resume_id=${res2Id}`);
 
   // Verification 9: Approval Center (And test that outdated check works)
   const approved2 = approveApplicationPackage(app2.id, userId, true);
-  const mod9Matches2 = approved2.human_approved === 1 && approved2.status === 'Ready to Apply';
-  recordResult('Marcus Vance', 9, 'Approval Center', res2Id, mod9Matches2, `Package for Marcus approved to 'Ready to Apply'`);
+  const mod9Matches2 = approved2.human_approved === 1 && approved2.status === 'Ready for Candidate Submission';
+  recordResult('Marcus Vance', 9, 'Approval Center', res2Id, mod9Matches2, `Package for Marcus approved to 'Ready for Candidate Submission'`);
 
   // Verification 10: Application Tracker (Preserves Sarah's earlier submission without rewriting)
   const submitted2 = recordApplicationSubmission(app2.id, userId, 'Verified test submission for Marcus Vance Cloud Architect');
-  const pastSubmissions = db.prepare("SELECT * FROM applications WHERE user_id = ? AND status = 'Applied'").all(userId) as any[];
+  const pastSubmissions = db.prepare("SELECT * FROM applications WHERE user_id = ? AND status IN ('Submitted by Candidate', 'Applied')").all(userId) as any[];
   const sarahStillExists = pastSubmissions.some(a => a.source_resume_id === res1Id);
   const marcusExists = pastSubmissions.some(a => a.source_resume_id === res2Id);
 
@@ -441,7 +441,7 @@ async function run10ModulesVerification() {
 
   // Verification 6: Best Matches (Must match Finance high, and disqualify Software)
   const topFinMatch = ranked3.find(r => /deloitte|pwc/i.test(r.job.employer)) || ranked3[0];
-  const techJob = allJobs.find(j => j.id === 'job_tech_stripe_01') || allJobs.find(j => j.id === 'job_test_irrelevant_03')!;
+  const techJob = allJobs.find(j => /datadog|stripe/i.test(j.employer)) || allJobs.find(j => /software|engineer/i.test(j.title)) || allJobs[0];
   const techFitForFinance = calculateMatchScore(candidate3, techJob);
 
   const mod6Matches3 = topFinMatch.match.overall_score >= 80 &&
@@ -462,17 +462,17 @@ async function run10ModulesVerification() {
   const app3 = prepareApplicationPackage(topFinMatch.job.id, userId, res3Id);
   const mod8Matches3 = app3.source_resume_id === res3Id &&
                        app3.is_outdated === 0 &&
-                       app3.status === 'Approval Pending';
+                       app3.status === 'Package Prepared';
   recordResult('Elena Rostova', 8, 'Application Packages', res3Id, mod8Matches3, `Staged application package references source_resume_id=${res3Id}`);
 
   // Verification 9: Approval Center
   const approved3 = approveApplicationPackage(app3.id, userId, true);
-  const mod9Matches3 = approved3.human_approved === 1 && approved3.status === 'Ready to Apply';
-  recordResult('Elena Rostova', 9, 'Approval Center', res3Id, mod9Matches3, `Package for Elena approved to 'Ready to Apply'`);
+  const mod9Matches3 = approved3.human_approved === 1 && approved3.status === 'Ready for Candidate Submission';
+  recordResult('Elena Rostova', 9, 'Approval Center', res3Id, mod9Matches3, `Package for Elena approved to 'Ready for Candidate Submission'`);
 
   // Verification 10: Application Tracker
   const submitted3 = recordApplicationSubmission(app3.id, userId, 'Verified test submission for Elena Rostova CPA');
-  const allHistoricalApps = db.prepare("SELECT * FROM applications WHERE user_id = ? AND status = 'Applied'").all(userId) as any[];
+  const allHistoricalApps = db.prepare("SELECT * FROM applications WHERE user_id = ? AND status IN ('Submitted by Candidate', 'Applied')").all(userId) as any[];
   const sarahPreserved = allHistoricalApps.some(a => a.source_resume_id === res1Id);
   const marcusPreserved = allHistoricalApps.some(a => a.source_resume_id === res2Id);
   const elenaPreserved = allHistoricalApps.some(a => a.source_resume_id === res3Id);

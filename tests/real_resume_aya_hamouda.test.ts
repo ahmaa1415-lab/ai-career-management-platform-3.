@@ -16,8 +16,8 @@ console.log('===================================================================
 
 export const REAL_AYA_HAMOUDA_CV = `
 AYA HAMOUDA MAHMOUD ALI
-Nasr City, Cairo, Egypt | Mobile: +201042400410
-Ayahamouda14@gmail.com | linkedin.com/in/aya-h-mahmoud14
+Nasr City, Cairo, Egypt | Mobile: +201000000000
+candidate.synthetic@example.internal | linkedin.com/in/synthetic-candidate
 
 PROFESSIONAL SUMMARY
 Category & Trade Marketing professional with 10+ years of experience across FMCG, Personal Care, E-commerce, and Pharmaceuticals. Experienced in managing consumer categories, optimizing assortments, analyzing market and competitor trends, developing promotional plans, and driving category growth. Proven ability to work cross-functionally with Marketing, Sales, Supply Chain, Finance, retailers, and distributors to turn market insights into commercial opportunities and successful execution.
@@ -81,13 +81,13 @@ Arabic – Native | English – Fluent (C1)
 async function runRealResumeTest() {
   const user = getOrCreateDefaultUser();
 
-  // Update user with her real details
+  // Update user with synthetic candidate details (preserving career profile while eliminating live PII)
   db.prepare('UPDATE users SET full_name = ?, email = ? WHERE id = ?').run(
     'Aya Hamouda Mahmoud Ali',
-    'Ayahamouda14@gmail.com',
+    'candidate.synthetic@example.internal',
     user.id
   );
-  console.log('✓ Candidate user record initialized: Aya Hamouda Mahmoud Ali (Ayahamouda14@gmail.com)');
+  console.log('✓ Candidate user record initialized: Aya Hamouda Mahmoud Ali (candidate.synthetic@example.internal)');
 
   // 1. INGESTION & ENTITY EXTRACTION
   console.log('\n--- STEP 1: CV Ingestion & Entity Extraction ---');
@@ -107,8 +107,8 @@ async function runRealResumeTest() {
   console.log(`  Extracted Work Experiences: ${extracted.experiences.length}`);
   console.log(`  Extracted Education Count: ${extracted.education.length}`);
 
-  assert.strictEqual(extracted.email, 'ayahamouda14@gmail.com');
-  assert.strictEqual(extracted.phone, '+201042400410');
+  assert.strictEqual(extracted.email, 'candidate.synthetic@example.internal');
+  assert.strictEqual(extracted.phone, '+201000000000');
   assert.ok(extracted.location.includes('Cairo') || extracted.location.includes('Nasr City'));
   assert.ok(extracted.skills.includes('Category Management'));
   assert.ok(extracted.skills.includes('Trade Marketing'));
@@ -225,6 +225,38 @@ async function runRealResumeTest() {
 
   // 6. JOB MATCHING & OURSHOPEE CATEGORY MANAGER
   console.log('\n--- STEP 6: Job Discovery & Match Scoring ---');
+  // Seed Ourshopee Category Manager listing if not already present
+  db.prepare(`
+    INSERT INTO job_listings (
+      id, employer, title, location, source, source_url, publication_date,
+      salary_raw, requirements, experience_required_years, seniority, visa_sponsorship,
+      remote_eligibility, is_verified, raw_description, application_type, portal_platform,
+      authenticity_status
+    ) VALUES (
+      'post_li_ourshopee_02',
+      'Ourshopee',
+      'Category Manager - Beauty, Cosmetics & Health (LinkedIn Recruiter Post)',
+      'Dubai, UAE',
+      'LinkedIn Post',
+      'https://www.linkedin.com/posts/ourshopee-dubai-category-manager',
+      '2026-11-06',
+      'Competitive UAE Package (Direct HR: mansi.deo@ourshopee.com)',
+      '["Category Management", "Beauty", "Cosmetics", "Health", "5+ years experience", "UAE experience mandatory"]',
+      5,
+      'Senior',
+      'Yes',
+      'Onsite',
+      1,
+      'We are hiring a Category Manager for Beauty, Cosmetics & Health. UAE experience mandatory. Email: mansi.deo@ourshopee.com',
+      'recruiter_post',
+      'Direct Email',
+      'VERIFIED_OPEN'
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      authenticity_status = 'VERIFIED_OPEN'
+  `).run();
+
   syncAndDeduplicateJobs();
   const allJobs = getAllVerifiedJobs();
 
@@ -237,8 +269,8 @@ async function runRealResumeTest() {
       id: 'prof_candidate_main',
       user_id: user.id,
       full_name: 'Aya Hamouda Mahmoud Ali',
-      email: 'Ayahamouda14@gmail.com',
-      phone: '+201042400410',
+      email: 'candidate.synthetic@example.internal',
+      phone: '+201000000000',
       headline: 'Category & Trade Marketing Professional',
       summary: 'Category & Trade Marketing professional with 10+ years experience...',
       current_status: 'Employed',
@@ -296,8 +328,8 @@ async function runRealResumeTest() {
       resume_id: 'cv_original_master',
       user_id: user.id,
       candidate_name: 'Aya Hamouda Mahmoud Ali',
-      email: 'Ayahamouda14@gmail.com',
-      phone: '+201042400410',
+      email: 'candidate.synthetic@example.internal',
+      phone: '+201000000000',
       location: 'Cairo, Egypt',
       current_headline: 'Category & Trade Marketing Professional',
       career_progression: '10 years',
@@ -348,20 +380,21 @@ async function runRealResumeTest() {
   console.log(`  Email ID: ${applyResult.email_id}`);
   console.log(`  Attached Tailored CV: ${applyResult.cv_title}`);
 
-  // Verify DB record
+  // Verify DB record matches canonical candidate consent architecture
   const appInDB = db.prepare('SELECT * FROM applications WHERE id = ?').get(applyResult.application_id) as any;
   assert.ok(appInDB, 'Application must exist in DB');
-  assert.strictEqual(appInDB.status, 'Applied');
+  assert.strictEqual(appInDB.status, 'Package Prepared');
   assert.strictEqual(appInDB.recruiter_email, 'mansi.deo@ourshopee.com');
 
   const emailInDB = db.prepare('SELECT * FROM emails WHERE id = ?').get(applyResult.email_id) as any;
   assert.ok(emailInDB, 'Outbound email must exist in DB');
   assert.strictEqual(emailInDB.recipient, 'mansi.deo@ourshopee.com');
-  assert.strictEqual(emailInDB.is_sent, 1);
+  assert.strictEqual(emailInDB.is_draft, 1);
+  assert.strictEqual(emailInDB.is_sent, 0);
   assert.ok(emailInDB.body.includes('Dear Mansi Deo,'));
   assert.ok(emailInDB.body.includes('Category Manager - Beauty, Cosmetics & Health'));
   assert.ok(emailInDB.body.includes('Aya Hamouda Mahmoud Ali'));
-  console.log('✓ Step 8 Passed: Direct application email dispatched to mansi.deo@ourshopee.com');
+  console.log('✓ Step 8 Passed: Direct application email prepared as draft awaiting candidate approval');
 
   // 9. LINKEDIN PROFILE OPTIMIZATION
   console.log('\n--- STEP 9: LinkedIn Profile Optimization ---');
@@ -371,7 +404,7 @@ async function runRealResumeTest() {
   console.log(`  Headline 3: ${linkedinOpt.copy_ready_content.headline_options[2]?.headline}`);
   assert.ok(linkedinOpt.copy_ready_content.headline_options[0]?.headline.includes('Category Manager'));
   assert.ok(linkedinOpt.copy_ready_content.about_section.includes('Category Growth & Assortment Optimization'));
-  assert.ok(linkedinOpt.copy_ready_content.about_section.includes('Ayahamouda14@gmail.com'));
+  assert.ok(linkedinOpt.copy_ready_content.about_section.includes('candidate.synthetic@example.internal'));
   console.log('✓ Step 9 Passed: Recruiter-optimized LinkedIn headlines & about section generated');
 
   console.log('\n========================================================================');

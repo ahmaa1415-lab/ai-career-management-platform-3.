@@ -28,6 +28,13 @@ export async function POST(req: Request) {
       work_mode_preference
     } = body;
 
+    if (!target_countries || !Array.isArray(target_countries) || target_countries.length === 0) {
+      return NextResponse.json(
+        { error: 'Non-negotiable requirement: Target countries cannot be empty.' },
+        { status: 400 }
+      );
+    }
+
     const safeCountries = Array.isArray(target_countries) ? target_countries : [];
     const safeCities = Array.isArray(target_cities) ? target_cities : [];
 
